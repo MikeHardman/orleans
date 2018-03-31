@@ -1,25 +1,25 @@
 ﻿//#define USE_SQL_SERVER
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
+using Orleans.Configuration;
 using Orleans.Messaging;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
-using Orleans.Runtime.MembershipService;
 using Xunit;
 using Xunit.Abstractions;
 
 namespace UnitTests.MessageCenterTests
 {
-    public class GatewaySelectionTest : IDisposable
+    public class GatewaySelectionTest
     {
-        private readonly ITestOutputHelper output;
+        protected readonly ITestOutputHelper output;
 
-        private static readonly List<Uri> gatewayAddressUris = new[]
+        protected static readonly List<Uri> gatewayAddressUris = new[]
         {
             new Uri("gwy.tcp://127.0.0.1:1/0"),
             new Uri("gwy.tcp://127.0.0.1:2/0"),
@@ -30,14 +30,6 @@ namespace UnitTests.MessageCenterTests
         public GatewaySelectionTest(ITestOutputHelper output)
         {
             this.output = output;
-            GrainClient.Uninitialize();
-            GrainClient.TestOnlyNoConnect = false;
-        }
-        
-        public void Dispose()
-        {
-            GrainClient.Uninitialize();
-            GrainClient.TestOnlyNoConnect = false;
         }
 
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Gateway")]
@@ -53,14 +45,19 @@ namespace UnitTests.MessageCenterTests
             var cfg = new ClientConfiguration();
             cfg.Gateways = null;
             bool failed = false;
+            IDisposable client = null;
             try
             {
-                GrainClient.Initialize(cfg);
+                new ClientBuilder().UseConfiguration(cfg).Build();
             }
             catch (Exception exc)
             {
                 output.WriteLine(exc.ToString());
                 failed = true;
+            }
+            finally
+            {
+                client?.Dispose();
             }
             Assert.True(failed, "GatewaySelection_EmptyList failed as GatewayManager did not throw on empty Gateway list.");
 
@@ -74,67 +71,7 @@ namespace UnitTests.MessageCenterTests
             //Client.Initialize(cfg);
         }
 
-#if USE_SQL_SERVER || DEBUG
-        [Fact, TestCategory("Gateway"), TestCategory("SqlServer")]
-        public async Task GatewaySelection_SqlServer()
-        {
-            string testName = Guid.NewGuid().ToString();// TestContext.TestName;
-
-            Guid serviceId = Guid.NewGuid();
-
-            GlobalConfiguration cfg = new GlobalConfiguration
-            {
-                ServiceId = serviceId,
-                DeploymentId = testName,
-                DataConnectionString = TestHelper.TestUtils.GetSqlConnectionString()
-            };
-
-            var membership = new SqlMembershipTable();
-            var logger = LogManager.GetLogger(membership.GetType().Name);
-            await membership.InitializeMembershipTable(cfg, true, logger);
-
-            IMembershipTable membershipTable = membership;
-
-            // Pre-populate gateway table with data
-            int count = 1;
-            foreach (Uri gateway in gatewayAddressUris)
-            {
-                output.WriteLine("Adding gataway data for {0}", gateway);
-
-                SiloAddress siloAddress = gateway.ToSiloAddress();
-                Assert.NotNull(siloAddress);
-
-                MembershipEntry MembershipEntry = new MembershipEntry
-                {
-                    SiloAddress = siloAddress,
-                    HostName = gateway.Host,
-                    Status = SiloStatus.Active,
-                    ProxyPort = gateway.Port,
-                    StartTime = DateTime.UtcNow
-                };
-
-                var tableVersion = new TableVersion(count, Guid.NewGuid().ToString());
-
-                output.WriteLine("Inserting gataway data for {0} with TableVersion={1}", MembershipEntry, tableVersion);
-
-                bool ok = await membershipTable.InsertRow(MembershipEntry, tableVersion);
-                count++;
-                Assert.True(ok, $"Membership record should have been written OK but were not: {MembershipEntry}");
-
-                output.WriteLine("Successfully inserted Membership row {0}", MembershipEntry);
-            }
-
-            MembershipTableData membershipTableData = await membershipTable.ReadAll();
-            Assert.NotNull(membershipTableData);
-            Assert.Equal(gatewayAddressUris.Count, membershipTableData.Members.Count);  // "Number of gateway records read"
-
-            IGatewayListProvider listProvider = membership;
-
-            Test_GatewaySelection(listProvider);
-        }
-#endif
-
-        private void Test_GatewaySelection(IGatewayListProvider listProvider)
+        protected void Test_GatewaySelection(IGatewayListProvider listProvider)
         {
             IList<Uri> gatewayUris = listProvider.GetGateways().GetResult();
             Assert.True(gatewayUris.Count > 0, $"Found some gateways. Data = {Utils.EnumerableToString(gatewayUris)}");
@@ -148,7 +85,12 @@ namespace UnitTests.MessageCenterTests
             {
                 Gateways = gatewayEndpoints
             };
-            var gatewayManager = new GatewayManager(cfg, listProvider);
+            var gatewayOptions = new GatewayOptions()
+            {
+                GatewayListRefreshPeriod = cfg.GatewayListRefreshPeriod,
+                PreferedGatewayIndex = cfg.PreferedGatewayIndex
+            };
+            var gatewayManager = new GatewayManager(gatewayOptions, listProvider, NullLoggerFactory.Instance);
 
             var counts = new int[4];
 
@@ -189,7 +131,7 @@ namespace UnitTests.MessageCenterTests
                 list = gatewayUris;
             }
 
-            #region Implementation of IGatewayListProvider
+#region Implementation of IGatewayListProvider
 
             public Task<IList<Uri>> GetGateways()
             {
@@ -205,12 +147,12 @@ namespace UnitTests.MessageCenterTests
             {
                 get { return false; }
             }
-            public Task InitializeGatewayListProvider(ClientConfiguration clientConfiguration, Logger logger)
+            public Task InitializeGatewayListProvider()
             {
-                return TaskDone.Done;
+                return Task.CompletedTask;
             }
 
-            #endregion
+#endregion
 
 
         }

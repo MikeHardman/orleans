@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Orleans;
@@ -7,6 +7,11 @@ using Orleans;
 
 namespace UnitTests.GrainInterfaces
 {
+    public interface IServiceIdGrain : IGrainWithGuidKey
+    {
+        Task<string> GetServiceId();
+    }
+
     public interface IPersistenceTestGrain : IGrainWithGuidKey
     {
         Task<bool> CheckStateInit();
@@ -37,8 +42,9 @@ namespace UnitTests.GrainInterfaces
         Task<int> DoRead();
         Task DoDelete();
     }
+    
 
-    public interface IAzureStorageTestGrain : IGrainWithGuidKey
+    public interface IGrainStorageTestGrain : IGrainWithGuidKey
     {
         Task<int> GetValue();
         Task DoWrite(int val);
@@ -46,7 +52,7 @@ namespace UnitTests.GrainInterfaces
         Task DoDelete();
     }
 
-    public interface IAzureStorageGenericGrain<T> : IGrainWithIntegerKey
+    public interface IGrainStorageGenericGrain<T> : IGrainWithIntegerKey
     {
         Task<T> GetValue();
         Task DoWrite(T val);
@@ -54,7 +60,7 @@ namespace UnitTests.GrainInterfaces
         Task DoDelete();
     }
 
-    public interface IAzureStorageTestGrain_GuidExtendedKey : IGrainWithGuidCompoundKey
+    public interface IGrainStorageTestGrain_GuidExtendedKey : IGrainWithGuidCompoundKey
     {
         Task<string> GetExtendedKeyValue();
         Task<int> GetValue();
@@ -63,7 +69,7 @@ namespace UnitTests.GrainInterfaces
         Task DoDelete();
     }
 
-    public interface IAzureStorageTestGrain_LongKey : IGrainWithIntegerKey
+    public interface IGrainStorageTestGrain_LongKey : IGrainWithIntegerKey
     {
         Task<int> GetValue();
         Task DoWrite(int val);
@@ -71,7 +77,49 @@ namespace UnitTests.GrainInterfaces
         Task DoDelete();
     }
 
-    public interface IAzureStorageTestGrain_LongExtendedKey : IGrainWithIntegerCompoundKey
+    public interface IGrainStorageTestGrain_LongExtendedKey : IGrainWithIntegerCompoundKey
+    {
+        Task<string> GetExtendedKeyValue();
+        Task<int> GetValue();
+        Task DoWrite(int val);
+        Task<int> DoRead();
+        Task DoDelete();
+    }
+
+    public interface IAWSStorageTestGrain : IGrainWithGuidKey
+    {
+        Task<int> GetValue();
+        Task DoWrite(int val);
+        Task<int> DoRead();
+        Task DoDelete();
+    }
+
+    public interface IAWSStorageGenericGrain<T> : IGrainWithIntegerKey
+    {
+        Task<T> GetValue();
+        Task DoWrite(T val);
+        Task<T> DoRead();
+        Task DoDelete();
+    }
+
+    public interface IAWSStorageTestGrain_GuidExtendedKey : IGrainWithGuidCompoundKey
+    {
+        Task<string> GetExtendedKeyValue();
+        Task<int> GetValue();
+        Task DoWrite(int val);
+        Task<int> DoRead();
+        Task DoDelete();
+    }
+
+    public interface IAWSStorageTestGrain_LongKey : IGrainWithIntegerKey
+    {
+        Task<int> GetValue();
+        Task DoWrite(int val);
+        Task<int> DoRead();
+        Task DoDelete();
+    }
+
+    public interface IAWSStorageTestGrain_LongExtendedKey : IGrainWithIntegerCompoundKey
     {
         Task<string> GetExtendedKeyValue();
         Task<int> GetValue();
@@ -94,6 +142,15 @@ namespace UnitTests.GrainInterfaces
         Task<int> GetValue();
         Task DoWrite(int val);
         Task<int> DoRead();
+        Task<string> GetActivationId();
+    }
+
+    public interface IPersistenceProviderErrorProxyGrain : IGrainWithGuidKey
+    {
+        Task<int> GetValue(IPersistenceProviderErrorGrain other);
+        Task DoWrite(int val, IPersistenceProviderErrorGrain other);
+        Task<int> DoRead(IPersistenceProviderErrorGrain other);
+        Task<string> GetActivationId();
     }
 
     public interface IPersistenceUserHandledErrorGrain : IGrainWithGuidKey

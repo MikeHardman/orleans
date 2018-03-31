@@ -1,39 +1,47 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Orleans;
-using Orleans.GrainDirectory;
+using Orleans.Hosting;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.TestingHost;
+using TestExtensions;
+using UnitTests.TestHelper;
 using Xunit;
 using Xunit.Sdk;
 
 namespace UnitTests.General
 {
-    public class ConsistentRingProviderTests_Silo : HostedTestClusterPerTest
+    public class ConsistentRingProviderTests_Silo : TestClusterPerTest
     {
-        private static readonly TestingSiloOptions siloOptions = new TestingSiloOptions
-        {
-            StartFreshOrleans = true,
-            ReminderServiceType = GlobalConfiguration.ReminderServiceProviderType.ReminderTableGrain,
-            LivenessType = GlobalConfiguration.LivenessProviderType.MembershipTableGrain,
-            SiloConfigFile = new FileInfo("OrleansConfigurationForTesting.xml"),
-        };
-
         private const int numAdditionalSilos = 3;
         private readonly TimeSpan failureTimeout = TimeSpan.FromSeconds(30);
         private readonly TimeSpan endWait = TimeSpan.FromMinutes(5);
 
         enum Fail { First, Random, Last }
 
-        public override TestingSiloHost CreateSiloHost()
+        public ClusterConfiguration ClusterConfiguration { get; set; }
+
+        protected override void ConfigureTestCluster(TestClusterBuilder builder)
         {
-            return new TestingSiloHost(siloOptions);
+            builder.ConfigureLegacyConfiguration(legacy =>
+            {
+                this.ClusterConfiguration = legacy.ClusterConfiguration;
+            });
+            builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        }
+
+        private class SiloConfigurator : ISiloBuilderConfigurator
+        {
+            public void Configure(ISiloHostBuilder hostBuilder)
+            {
+                hostBuilder.AddMemoryGrainStorage("MemoryStore")
+                    .AddMemoryGrainStorageAsDefault();
+            }
         }
 
         #region Tests
@@ -41,7 +49,7 @@ namespace UnitTests.General
         [Fact, TestCategory("Functional"), TestCategory("Ring")]
         public async Task Ring_Basic()
         {
-            this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
+            await this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
             VerificationScenario(0);
         }
@@ -84,20 +92,20 @@ namespace UnitTests.General
 
         private async Task FailureTest(Fail failCode, int numOfFailures)
         {
-            this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
+            await this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
 
-            List<SiloHandle> failures = getSilosToFail(failCode, numOfFailures);
+            List<SiloHandle> failures = await getSilosToFail(failCode, numOfFailures);
             foreach (SiloHandle fail in failures) // verify before failure
             {
-                VerificationScenario(PickKey(fail.Silo.SiloAddress)); // fail.Silo.SiloAddress.GetConsistentHashCode());
+                VerificationScenario(PickKey(fail.SiloAddress)); // fail.SiloAddress.GetConsistentHashCode());
             }
 
-            logger.Info("FailureTest {0}, Code {1}, Stopping silos: {2}", numOfFailures, failCode, Utils.EnumerableToString(failures, handle => handle.Silo.SiloAddress.ToString()));
+            logger.Info("FailureTest {0}, Code {1}, Stopping silos: {2}", numOfFailures, failCode, Utils.EnumerableToString(failures, handle => handle.SiloAddress.ToString()));
             List<uint> keysToTest = new List<uint>();
             foreach (SiloHandle fail in failures) // verify before failure
             {
-                keysToTest.Add(PickKey(fail.Silo.SiloAddress)); //fail.Silo.SiloAddress.GetConsistentHashCode());
+                keysToTest.Add(PickKey(fail.SiloAddress)); //fail.SiloAddress.GetConsistentHashCode());
                 this.HostedCluster.StopSilo(fail);
             }
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
@@ -126,14 +134,14 @@ namespace UnitTests.General
         private async Task JoinTest(int numOfJoins)
         {
             logger.Info("JoinTest {0}", numOfJoins);
-            this.HostedCluster.StartAdditionalSilos(numAdditionalSilos - numOfJoins);
+            await this.HostedCluster.StartAdditionalSilos(numAdditionalSilos - numOfJoins);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
 
-            List<SiloHandle> silos = this.HostedCluster.StartAdditionalSilos(numOfJoins);
+            List<SiloHandle> silos = await this.HostedCluster.StartAdditionalSilos(numOfJoins);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
             foreach (SiloHandle sh in silos)
             {
-                VerificationScenario(PickKey(sh.Silo.SiloAddress)); 
+                VerificationScenario(PickKey(sh.SiloAddress));
             }
             Thread.Sleep(TimeSpan.FromSeconds(15));
         }
@@ -141,18 +149,19 @@ namespace UnitTests.General
         [Fact, TestCategory("Functional"), TestCategory("Ring")]
         public async Task Ring_1F1J()
         {
-            this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
+            await this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
-            List<SiloHandle> failures = getSilosToFail(Fail.Random, 1);
-            uint keyToCheck = PickKey(failures[0].Silo.SiloAddress);// failures[0].Silo.SiloAddress.GetConsistentHashCode();
+            List<SiloHandle> failures = await getSilosToFail(Fail.Random, 1);
+            uint keyToCheck = PickKey(failures[0].SiloAddress);// failures[0].SiloAddress.GetConsistentHashCode();
             List<SiloHandle> joins = null;
 
             // kill a silo and join a new one in parallel
-            logger.Info("Killing silo {0} and joining a silo", failures[0].Silo.SiloAddress);
+            logger.Info("Killing silo {0} and joining a silo", failures[0].SiloAddress);
+            
             var tasks = new Task[2]
             {
                 Task.Factory.StartNew(() => this.HostedCluster.StopSilo(failures[0])),
-                Task.Factory.StartNew(() => joins = this.HostedCluster.StartAdditionalSilos(1))
+                this.HostedCluster.StartAdditionalSilos(1).ContinueWith(t => joins = t.GetAwaiter().GetResult())
             };
             Task.WaitAll(tasks, endWait);
 
@@ -161,7 +170,7 @@ namespace UnitTests.General
             AssertEventually(() =>
             {
                 VerificationScenario(keyToCheck); // verify failed silo's key
-                VerificationScenario(PickKey(joins[0].Silo.SiloAddress)); // verify newly joined silo's key
+                VerificationScenario(PickKey(joins[0].SiloAddress)); // verify newly joined silo's key
             }, failureTimeout);
         }
 
@@ -169,19 +178,19 @@ namespace UnitTests.General
         [Fact, TestCategory("Functional"), TestCategory("Ring")]
         public async Task Ring_1Fsec1J()
         {
-            this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
+            await this.HostedCluster.StartAdditionalSilos(numAdditionalSilos);
             await this.HostedCluster.WaitForLivenessToStabilizeAsync();
             //List<SiloHandle> failures = getSilosToFail(Fail.Random, 1);
-            SiloHandle fail = this.HostedCluster.Secondary;
-            uint keyToCheck = PickKey(fail.Silo.SiloAddress); //fail.Silo.SiloAddress.GetConsistentHashCode();
+            SiloHandle fail = this.HostedCluster.SecondarySilos.First();
+            uint keyToCheck = PickKey(fail.SiloAddress); //fail.SiloAddress.GetConsistentHashCode();
             List<SiloHandle> joins = null;
 
             // kill a silo and join a new one in parallel
-            logger.Info("Killing secondary silo {0} and joining a silo", fail.Silo.SiloAddress);
+            logger.Info("Killing secondary silo {0} and joining a silo", fail.SiloAddress);
             var tasks = new Task[2]
             {
                 Task.Factory.StartNew(() => this.HostedCluster.StopSilo(fail)),
-                Task.Factory.StartNew(() => joins = this.HostedCluster.StartAdditionalSilos(1))
+                this.HostedCluster.StartAdditionalSilos(1).ContinueWith(t => joins = t.GetAwaiter().GetResult())
             };
             Task.WaitAll(tasks, endWait);
 
@@ -190,7 +199,7 @@ namespace UnitTests.General
             AssertEventually(() =>
             {
                 VerificationScenario(keyToCheck); // verify failed silo's key
-                VerificationScenario(PickKey(joins[0].Silo.SiloAddress));
+                VerificationScenario(PickKey(joins[0].SiloAddress));
             }, failureTimeout);
         }
 
@@ -201,16 +210,17 @@ namespace UnitTests.General
         private uint PickKey(SiloAddress responsibleSilo)
         {
             int iteration = 10000;
+            var testHooks = this.Client.GetTestHooks(this.HostedCluster.Primary);
             for (int i = 0; i < iteration; i++)
             {
                 double next = random.NextDouble();
                 uint randomKey = (uint)((double)RangeFactory.RING_SIZE * next);
-                SiloAddress s = this.HostedCluster.Primary.Silo.TestHook.ConsistentRingProvider.GetPrimaryTargetSilo(randomKey);
+                SiloAddress s = testHooks.GetConsistentRingPrimaryTargetSilo(randomKey).Result;
                 if (responsibleSilo.Equals(s))
                     return randomKey;
             }
             throw new Exception(String.Format("Could not pick a key that silo {0} will be responsible for. Primary.Ring = \n{1}",
-                responsibleSilo, this.HostedCluster.Primary.Silo.TestHook.ConsistentRingProvider));
+                responsibleSilo, testHooks.GetConsistentRingProviderDiagnosticInfo().Result));
         }
 
         private void VerificationScenario(uint testKey)
@@ -220,9 +230,9 @@ namespace UnitTests.General
 
             foreach (var siloHandle in this.HostedCluster.GetActiveSilos())
             {
-                long hash = siloHandle.Silo.SiloAddress.GetConsistentHashCode();
+                long hash = siloHandle.SiloAddress.GetConsistentHashCode();
                 int index = silos.FindLastIndex(siloAddr => siloAddr.GetConsistentHashCode() < hash) + 1;
-                silos.Insert(index, siloHandle.Silo.SiloAddress);
+                silos.Insert(index, siloHandle.SiloAddress);
             }
 
             // verify parameter key
@@ -243,7 +253,8 @@ namespace UnitTests.General
 
         private void VerifyKey(uint key, List<SiloAddress> silos)
         {
-            SiloAddress truth = this.HostedCluster.Primary.Silo.TestHook.ConsistentRingProvider.GetPrimaryTargetSilo(key); //expected;
+            var testHooks = this.Client.GetTestHooks(this.HostedCluster.Primary);
+            SiloAddress truth = testHooks.GetConsistentRingPrimaryTargetSilo(key).Result; //expected;
             //if (truth == null) // if the truth isn't passed, we compute it here
             //{
             //    truth = silos.Find(siloAddr => (key <= siloAddr.GetConsistentHashCode()));
@@ -256,30 +267,30 @@ namespace UnitTests.General
             // lookup for 'key' should return 'truth' on all silos
             foreach (var siloHandle in this.HostedCluster.GetActiveSilos()) // do this for each silo
             {
-                SiloAddress s = siloHandle.Silo.TestHook.ConsistentRingProvider.GetPrimaryTargetSilo((uint)key);
+                SiloAddress s = testHooks.GetConsistentRingPrimaryTargetSilo((uint)key).Result;
                 Assert.Equal(truth, s);
             }
         }
 
-        private List<SiloHandle> getSilosToFail(Fail fail, int numOfFailures)
+        private async Task<List<SiloHandle>> getSilosToFail(Fail fail, int numOfFailures)
         {
             List<SiloHandle> failures = new List<SiloHandle>();
             int count = 0, index = 0;
 
             // Figure out the primary directory partition and the silo hosting the ReminderTableGrain.
-            bool usingReminderGrain = this.HostedCluster.Primary.Silo.GlobalConfig.ReminderServiceType.Equals(GlobalConfiguration.ReminderServiceProviderType.ReminderTableGrain);
-            IReminderTable tableGrain = GrainClient.GrainFactory.GetGrain<IReminderTableGrain>(Constants.ReminderTableGrainId);
-            SiloAddress reminderTableGrainPrimaryDirectoryAddress = this.HostedCluster.Primary.Silo.LocalGrainDirectory.GetPrimaryForGrain(((GrainReference) tableGrain).GrainId);
-            SiloHandle reminderTableGrainPrimaryDirectory = this.HostedCluster.GetActiveSilos().Where(sh => sh.Silo.SiloAddress.Equals(reminderTableGrainPrimaryDirectoryAddress)).FirstOrDefault();
-            AddressesAndTag addresses;
-            bool res = reminderTableGrainPrimaryDirectory.Silo.LocalGrainDirectory.LocalLookup(((GrainReference)tableGrain).GrainId, out addresses);
-            ActivationAddress reminderGrainActivation = addresses.Addresses.FirstOrDefault();
+            bool usingReminderGrain = this.ClusterConfiguration.Globals.ReminderServiceType.Equals(GlobalConfiguration.ReminderServiceProviderType.ReminderTableGrain);
+            IReminderTable tableGrain = this.GrainFactory.GetGrain<IReminderTableGrain>(Constants.ReminderTableGrainId);
+            var tableGrainId = ((GrainReference)tableGrain).GrainId;
+            SiloAddress reminderTableGrainPrimaryDirectoryAddress = (await TestUtils.GetDetailedGrainReport(this.HostedCluster.InternalGrainFactory, tableGrainId, this.HostedCluster.Primary)).PrimaryForGrain;
+            // ask a detailed report from the directory partition owner, and get the actionvation addresses
+            var addresses = (await TestUtils.GetDetailedGrainReport(this.HostedCluster.InternalGrainFactory, tableGrainId, this.HostedCluster.GetSiloForAddress(reminderTableGrainPrimaryDirectoryAddress))).LocalDirectoryActivationAddresses;
+            ActivationAddress reminderGrainActivation = addresses.FirstOrDefault();
 
             SortedList<int, SiloHandle> ids = new SortedList<int, SiloHandle>();
             foreach (var siloHandle in this.HostedCluster.GetActiveSilos())
             {
-                SiloAddress siloAddress = siloHandle.Silo.SiloAddress;
-                if (siloAddress.Equals(this.HostedCluster.Primary.Silo.SiloAddress))
+                SiloAddress siloAddress = siloHandle.SiloAddress;
+                if (siloAddress.Equals(this.HostedCluster.Primary.SiloAddress))
                 {
                     continue;
                 }
@@ -291,7 +302,7 @@ namespace UnitTests.General
                         continue;
                     }
                 }
-                ids.Add(siloHandle.Silo.SiloAddress.GetConsistentHashCode(), siloHandle);
+                ids.Add(siloHandle.SiloAddress.GetConsistentHashCode(), siloHandle);
             }
 
             // we should not fail the primary!
@@ -342,7 +353,7 @@ namespace UnitTests.General
             SortedList<int, SiloAddress> ids = new SortedList<int, SiloAddress>(numAdditionalSilos + 2);
             foreach (var siloHandle in this.HostedCluster.GetActiveSilos())
             {
-                ids.Add(siloHandle.Silo.SiloAddress.GetConsistentHashCode(), siloHandle.Silo.SiloAddress);
+                ids.Add(siloHandle.SiloAddress.GetConsistentHashCode(), siloHandle.SiloAddress);
             }
             logger.Info("{0} list of silos: ", msg);
             foreach (var id in ids.Keys.ToList())
@@ -383,6 +394,5 @@ namespace UnitTests.General
         }
 
         #endregion
-
     }
 }

@@ -12,6 +12,8 @@ namespace UnitTests.GrainInterfaces
 
         Task ThrowsInvalidOperationException();
 
+        Task ThrowsNullReferenceException();
+
         Task ThrowsAggregateExceptionWrappingInvalidOperationException();
 
         Task ThrowsNestedAggregateExceptionsWrappingInvalidOperationException();
@@ -22,8 +24,19 @@ namespace UnitTests.GrainInterfaces
 
         Task ThrowsSynchronousInvalidOperationException();
 
+        Task<object> ThrowsSynchronousExceptionObjectTask();
+
         Task ThrowsMultipleExceptionsAggregatedInFaultedTask();
 
         Task ThrowsSynchronousAggregateExceptionWithMultipleInnerExceptions();
+    }
+
+    public interface IMessageSerializationGrain : IGrainWithIntegerKey
+    {
+        Task<object> EchoObject(object input);
+
+        Task GetUnserializableObjectChained();
+
+        Task<string> GetSiloIdentity();
     }
 }

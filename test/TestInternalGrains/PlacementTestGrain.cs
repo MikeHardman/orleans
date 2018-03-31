@@ -1,18 +1,41 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+
 using Orleans;
 using Orleans.Concurrency;
+using Orleans.Configuration;
 using Orleans.Placement;
 using Orleans.Runtime;
+using Orleans.Runtime.Messaging;
+using Orleans.Runtime.TestHooks;
+
 using UnitTests.GrainInterfaces;
 
 namespace UnitTests.Grains
 {
     internal abstract class PlacementTestGrainBase : Grain
     {
+        private readonly OverloadDetector overloadDetector;
+
+        private readonly TestHooksHostEnvironmentStatistics hostEnvironmentStatistics;
+        
+        private readonly LoadSheddingOptions loadSheddingOptions;
+
+        public PlacementTestGrainBase(
+            OverloadDetector overloadDetector,
+            TestHooksHostEnvironmentStatistics hostEnvironmentStatistics,
+            IOptions<LoadSheddingOptions> loadSheddingOptions)
+        {
+            this.overloadDetector = overloadDetector;
+            this.hostEnvironmentStatistics = hostEnvironmentStatistics;
+            this.loadSheddingOptions = loadSheddingOptions.Value;
+        }
+
         public Task<IPEndPoint> GetEndpoint()
         {
             return Task.FromResult(Data.Address.Silo.Endpoint);
@@ -30,7 +53,7 @@ namespace UnitTests.Grains
 
         public Task Nop()
         {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task StartLocalGrains(List<Guid> keys)
@@ -65,34 +88,40 @@ namespace UnitTests.Grains
         {
             // force the latched statistics to propigate throughout the cluster.
             IManagementGrain mgmtGrain =
-                grainFactory.GetGrain<IManagementGrain>(RuntimeInterfaceConstants.SYSTEM_MANAGEMENT_ID);
+                grainFactory.GetGrain<IManagementGrain>(0);
 
             var hosts = await mgmtGrain.GetHosts(true);
             var keys = hosts.Select(kvp => kvp.Key).ToArray();
             await mgmtGrain.ForceRuntimeStatisticsCollection(keys);
         }
 
+        public Task EnableOverloadDetection(bool enabled)
+        {
+            this.overloadDetector.Enabled = enabled;
+            return Task.CompletedTask;
+        }
+
         public Task LatchOverloaded()
         {
-            Silo.CurrentSilo.Metrics.LatchIsOverload(true);
+            this.hostEnvironmentStatistics.CpuUsage = this.loadSheddingOptions.LoadSheddingLimit + 1;
             return PropigateStatisticsToCluster(GrainFactory);
         }
 
         public Task UnlatchOverloaded()
         {
-            Silo.CurrentSilo.Metrics.UnlatchIsOverloaded();
+            this.hostEnvironmentStatistics.CpuUsage = null;
             return PropigateStatisticsToCluster(GrainFactory);
         }
 
         public Task LatchCpuUsage(float value)
         {
-            Silo.CurrentSilo.Metrics.LatchCpuUsage(value);
+            this.hostEnvironmentStatistics.CpuUsage = value;
             return PropigateStatisticsToCluster(GrainFactory);
         }
 
         public Task UnlatchCpuUsage()
         {
-            Silo.CurrentSilo.Metrics.UnlatchCpuUsage();
+            this.hostEnvironmentStatistics.CpuUsage = null;
             return PropigateStatisticsToCluster(GrainFactory);
         }
 
@@ -104,25 +133,61 @@ namespace UnitTests.Grains
     }
 
     [RandomPlacement]
-    internal class RandomPlacementTestGrain : 
-        PlacementTestGrainBase, IRandomPlacementTestGrain
-    {}
+    internal class RandomPlacementTestGrain : PlacementTestGrainBase, IRandomPlacementTestGrain
+    {
+        public RandomPlacementTestGrain(
+            OverloadDetector overloadDetector,
+            TestHooksHostEnvironmentStatistics hostEnvironmentStatistics,
+            IOptions<LoadSheddingOptions> loadSheddingOptions)
+            : base(overloadDetector, hostEnvironmentStatistics, loadSheddingOptions)
+        {
+        }
+    }
 
     [PreferLocalPlacement]
-    internal class PreferLocalPlacementTestGrain :
-       PlacementTestGrainBase, IPreferLocalPlacementTestGrain
-    { }
+    internal class PreferLocalPlacementTestGrain : PlacementTestGrainBase, IPreferLocalPlacementTestGrain
+    {
+        public PreferLocalPlacementTestGrain(
+            OverloadDetector overloadDetector,
+            TestHooksHostEnvironmentStatistics hostEnvironmentStatistics,
+            IOptions<LoadSheddingOptions> loadSheddingOptions)
+            : base(overloadDetector, hostEnvironmentStatistics, loadSheddingOptions)
+        {
+        }
+    }
 
     [StatelessWorker]
-    internal class LocalPlacementTestGrain : 
-        PlacementTestGrainBase, ILocalPlacementTestGrain
-    {}
+    internal class LocalPlacementTestGrain : PlacementTestGrainBase, ILocalPlacementTestGrain
+    {
+        public LocalPlacementTestGrain(
+            OverloadDetector overloadDetector,
+            TestHooksHostEnvironmentStatistics hostEnvironmentStatistics,
+            IOptions<LoadSheddingOptions> loadSheddingOptions)
+            : base(overloadDetector, hostEnvironmentStatistics, loadSheddingOptions)
+        {
+        }
+    }
 
     [ActivationCountBasedPlacement]
-    internal class ActivationCountBasedPlacementTestGrain : 
-        PlacementTestGrainBase, IActivationCountBasedPlacementTestGrain
-    {}
+    internal class ActivationCountBasedPlacementTestGrain : PlacementTestGrainBase, IActivationCountBasedPlacementTestGrain
+    {
+        public ActivationCountBasedPlacementTestGrain(
+            OverloadDetector overloadDetector,
+            TestHooksHostEnvironmentStatistics hostEnvironmentStatistics,
+            IOptions<LoadSheddingOptions> loadSheddingOptions)
+            : base(overloadDetector, hostEnvironmentStatistics, loadSheddingOptions)
+        {
+        }
+    }
 
+    internal class DefaultPlacementGrain : Grain, IDefaultPlacementGrain
+    {
+        public Task<PlacementStrategy> GetDefaultPlacement()
+        {
+            var defaultStrategy = this.ServiceProvider.GetRequiredService<PlacementStrategy>();
+            return Task.FromResult(defaultStrategy);
+        }
+    }
 
     //----------------------------------------------------------//
     // Grains for LocalContent grain case, when grain is activated on every silo by bootstrap provider.
@@ -136,7 +201,7 @@ namespace UnitTests.Grains
         
         public override Task OnActivateAsync()
         {
-            this.logger = GetLogger();
+            this.logger = this.GetLogger();
             logger.Info("OnActivateAsync");
             DelayDeactivation(TimeSpan.MaxValue);   // make sure this activation is not collected.
             cachedContent = RuntimeIdentity;        // store your silo identity as a local cached content in this grain.
@@ -162,7 +227,7 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            this.logger = GetLogger();
+            this.logger = this.GetLogger();
             logger.Info("OnActivateAsync");
             return base.OnActivateAsync();
         }

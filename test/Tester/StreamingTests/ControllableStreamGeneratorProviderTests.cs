@@ -1,83 +1,87 @@
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Orleans;
+using Orleans.Configuration;
+using Orleans.Hosting;
+using Orleans.Providers.Streams.Common;
 using Orleans.Providers.Streams.Generator;
 using Orleans.Runtime;
 using Orleans.Streams;
 using Orleans.TestingHost;
 using Orleans.TestingHost.Utils;
-using Tester;
+using TestExtensions;
 using TestGrainInterfaces;
 using TestGrains;
 using UnitTests.Grains;
-using UnitTests.Tester;
 using Xunit;
 
 namespace UnitTests.StreamingTests
 {
     public class ControllableStreamGeneratorProviderTests : OrleansTestingBase, IClassFixture<ControllableStreamGeneratorProviderTests.Fixture>
     {
-        private class Fixture : BaseTestClusterFixture
+        private const int TotalQueueCount = 4;
+        private readonly Fixture fixture;
+
+        public class Fixture : BaseTestClusterFixture
         {
             public const string StreamProviderName = GeneratedStreamTestConstants.StreamProviderName;
-            public static readonly string StreamProviderTypeName = typeof(GeneratorStreamProvider).FullName;
+            public static readonly string StreamProviderTypeName = typeof(PersistentStreamProvider).FullName;
             public const string StreamNamespace = GeneratedEventCollectorGrain.StreamNamespace;
 
-            public static readonly GeneratorAdapterConfig AdapterConfig = new GeneratorAdapterConfig(StreamProviderName)
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
             {
-                TotalQueueCount = 4,
-            };
+                builder.AddSiloBuilderConfigurator<MySiloBuilderConfigurator>();
+            }
 
-            protected override TestCluster CreateTestCluster()
+            private class MySiloBuilderConfigurator : ISiloBuilderConfigurator
             {
-                var options = new TestClusterOptions(2);
-                var settings = new Dictionary<string, string>();
-                // get initial settings from configs
-                AdapterConfig.WriteProperties(settings);
-
-                // add queue balancer setting
-                settings.Add(PersistentStreamProviderConfig.QUEUE_BALANCER_TYPE, StreamQueueBalancerType.DynamicClusterConfigDeploymentBalancer.ToString());
-
-                // add pub/sub settting
-                settings.Add(PersistentStreamProviderConfig.STREAM_PUBSUB_TYPE, StreamPubSubType.ImplicitOnly.ToString());
-
-                // register stream provider
-                options.ClusterConfiguration.Globals.RegisterStreamProvider<GeneratorStreamProvider>(StreamProviderName, settings);
-                return new TestCluster(options);
+                public void Configure(ISiloHostBuilder hostBuilder)
+                {
+                    hostBuilder
+                        .AddPersistentStreams(StreamProviderName,
+                            GeneratorAdapterFactory.Create, b => b
+                        .Configure<HashRingStreamQueueMapperOptions>(ob=>ob.Configure(options=>options.TotalQueueCount = TotalQueueCount))
+                        .UseDynamicClusterConfigDeploymentBalancer()
+                        .ConfigureStreamPubSub(StreamPubSubType.ImplicitOnly));
+                }
             }
         }
 
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+        public ControllableStreamGeneratorProviderTests(Fixture fixture)
+        {
+            this.fixture = fixture;
+        }
         
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Streaming")]
         public async Task ValidateControllableGeneratedStreamsTest()
         {
-            logger.Info("************************ ValidateControllableGeneratedStreamsTest *********************************");
+            this.fixture.Client.Logger().Info("************************ ValidateControllableGeneratedStreamsTest *********************************");
             await ValidateControllableGeneratedStreams();
         }
 
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Streaming")]
         public async Task Validate2ControllableGeneratedStreamsTest()
         {
-            logger.Info("************************ Validate2ControllableGeneratedStreamsTest *********************************");
+            this.fixture.Client.Logger().Info("************************ Validate2ControllableGeneratedStreamsTest *********************************");
             await ValidateControllableGeneratedStreams();
             await ValidateControllableGeneratedStreams();
         }
 
-        public async Task ValidateControllableGeneratedStreams()
+        private async Task ValidateControllableGeneratedStreams()
         {
             try
             {
-                var generatorConfig = new SimpleGeneratorConfig
+                var generatorConfig = new SimpleGeneratorOptions
                 {
                     StreamNamespace = Fixture.StreamNamespace,
                     EventsInStream = 100
                 };
 
-                var mgmt = GrainClient.GrainFactory.GetGrain<IManagementGrain>(0);
+                var mgmt = this.fixture.GrainFactory.GetGrain<IManagementGrain>(0);
                 object[] results = await mgmt.SendControlCommandToProvider(Fixture.StreamProviderTypeName, Fixture.StreamProviderName, (int)StreamGeneratorCommand.Configure, generatorConfig);
                 Assert.Equal(2, results.Length);
                 bool[] bResults = results.Cast<bool>().ToArray();
@@ -91,26 +95,26 @@ namespace UnitTests.StreamingTests
             }
             finally
             {
-                var reporter = GrainClient.GrainFactory.GetGrain<IGeneratedEventReporterGrain>(GeneratedStreamTestConstants.ReporterId);
+                var reporter = this.fixture.GrainFactory.GetGrain<IGeneratedEventReporterGrain>(GeneratedStreamTestConstants.ReporterId);
                 reporter.Reset().Ignore();
             }
         }
 
-        private async Task<bool> CheckCounters(SimpleGeneratorConfig generatorConfig, bool assertIsTrue)
+        private async Task<bool> CheckCounters(SimpleGeneratorOptions generatorConfig, bool assertIsTrue)
         {
-            var reporter = GrainClient.GrainFactory.GetGrain<IGeneratedEventReporterGrain>(GeneratedStreamTestConstants.ReporterId);
+            var reporter = this.fixture.GrainFactory.GetGrain<IGeneratedEventReporterGrain>(GeneratedStreamTestConstants.ReporterId);
 
             var report = await reporter.GetReport(GeneratedStreamTestConstants.StreamProviderName, GeneratedEventCollectorGrain.StreamNamespace);
             if (assertIsTrue)
             {
                 // one stream per queue
-                Assert.Equal(Fixture.AdapterConfig.TotalQueueCount, report.Count); // stream count
+                Assert.Equal(TotalQueueCount, report.Count); // stream count
                 foreach (int eventsPerStream in report.Values)
                 {
                     Assert.Equal(generatorConfig.EventsInStream, eventsPerStream);
                 }
             }
-            else if (Fixture.AdapterConfig.TotalQueueCount != report.Count ||
+            else if (TotalQueueCount != report.Count ||
                      report.Values.Any(count => count != generatorConfig.EventsInStream))
             {
                 return false;

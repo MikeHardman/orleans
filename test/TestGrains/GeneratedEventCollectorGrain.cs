@@ -20,7 +20,7 @@ namespace TestGrains
 
         public override async Task OnActivateAsync()
         {
-            logger = base.GetLogger("GeneratedEvenCollectorGrain " + base.IdentityString);
+            logger = this.GetLogger("GeneratedEvenCollectorGrain " + base.IdentityString);
             logger.Info("OnActivateAsync");
 
             var streamProvider = GetStreamProvider(GeneratedStreamTestConstants.StreamProviderName);
@@ -33,7 +33,7 @@ namespace TestGrains
                     logger.Info("Received a generated event {0}, of {1} events", e, counter);
                     if (e.EventType == GeneratedEvent.GeneratedEventType.Fill)
                     {
-                        return TaskDone.Done;
+                        return Task.CompletedTask;
                     }
                     var reporter = this.GrainFactory.GetGrain<IGeneratedEventReporterGrain>(GeneratedStreamTestConstants.ReporterId);
                     return reporter.ReportResult(this.GetPrimaryKey(), GeneratedStreamTestConstants.StreamProviderName, StreamNamespace, counter);

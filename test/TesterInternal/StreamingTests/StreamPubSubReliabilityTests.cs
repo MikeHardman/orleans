@@ -1,51 +1,74 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+using System;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Orleans;
+using Orleans.Hosting;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.TestingHost;
+using TestExtensions;
 using UnitTests.GrainInterfaces;
 using UnitTests.StorageTests;
-using UnitTests.Tester;
 using Xunit;
 
 namespace UnitTests.StreamingTests
 {
     public class StreamPubSubReliabilityTests : OrleansTestingBase, IClassFixture<StreamPubSubReliabilityTests.Fixture>
     {
-        public class Fixture : BaseClusterFixture
+        public class Fixture : BaseTestClusterFixture
         {
-            protected override TestingSiloHost CreateClusterHost()
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
             {
-                return new TestingSiloHost(new TestingSiloOptions
+                builder.Options.InitialSilosCount = 4;
+
+                builder.ConfigureLegacyConfiguration(legacy =>
                 {
-                    SiloConfigFile = new FileInfo("Config_StorageErrors.xml"),
-                    LivenessType = GlobalConfiguration.LivenessProviderType.MembershipTableGrain,
-                    ReminderServiceType = GlobalConfiguration.ReminderServiceProviderType.ReminderTableGrain
-                }, new TestingClientOptions
-                {
-                    ClientConfigFile = new FileInfo("ClientConfig_StreamProviders.xml")
+                    legacy.ClusterConfiguration.Globals.RegisterStorageProvider<UnitTests.StorageTests.ErrorInjectionStorageProvider>(PubSubStoreProviderName);
+
+                    legacy.ClusterConfiguration.Globals.MaxResendCount = 0;
+                    legacy.ClusterConfiguration.Globals.ResponseTimeout = TimeSpan.FromSeconds(30);
+
+                    legacy.ClientConfiguration.ClientSenderBuckets = 8192;
+                    legacy.ClientConfiguration.ResponseTimeout = TimeSpan.FromSeconds(30);
+                    legacy.ClientConfiguration.MaxResendCount = 0;
                 });
+                builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+                builder.AddClientBuilderConfigurator<ClientConfiguretor>();
+            }
+        }
+
+        public class SiloConfigurator : ISiloBuilderConfigurator
+        {
+            public void Configure(ISiloHostBuilder hostBuilder)
+            {
+                hostBuilder.AddSimpleMessageStreamProvider(StreamTestsConstants.SMS_STREAM_PROVIDER_NAME)
+                    .AddMemoryGrainStorage("MemoryStore", op => op.NumStorageGrains = 1);
+            }
+        }
+        public class ClientConfiguretor : IClientBuilderConfigurator
+        {
+            public void Configure(IConfiguration configuration, IClientBuilder clientBuilder)
+            {
+                clientBuilder.AddSimpleMessageStreamProvider(StreamTestsConstants.SMS_STREAM_PROVIDER_NAME);
             }
         }
 
         private const string PubSubStoreProviderName = "PubSubStore";
-        protected TestingSiloHost HostedCluster { get; private set; }
+
+        public IGrainFactory GrainFactory { get; }
 
         protected Guid StreamId;
         protected string StreamProviderName;
         protected string StreamNamespace;
+        protected TestCluster HostedCluster;
 
         public StreamPubSubReliabilityTests(Fixture fixture)
         {
-            HostedCluster = fixture.HostedCluster;
             StreamId = Guid.NewGuid();
             StreamProviderName = StreamTestsConstants.SMS_STREAM_PROVIDER_NAME;
             StreamNamespace = StreamTestsConstants.StreamLifecycleTestsNamespace;
-
+            this.HostedCluster = fixture.HostedCluster;
+            this.GrainFactory = fixture.GrainFactory;
             SetErrorInjection(PubSubStoreProviderName, ErrorInjectionPoint.None);
         }
 
@@ -67,7 +90,7 @@ namespace UnitTests.StreamingTests
             SetErrorInjection(PubSubStoreProviderName, ErrorInjectionPoint.BeforeRead);
 
             // TODO: expect StorageProviderInjectedError directly instead of OrleansException
-            await Assert.ThrowsAsync<OrleansException>(() =>
+            await Assert.ThrowsAsync<StorageProviderInjectedError>(() =>
                 Test_PubSub_Stream(StreamProviderName, StreamId));
         }
 
@@ -76,20 +99,18 @@ namespace UnitTests.StreamingTests
         {
             SetErrorInjection(PubSubStoreProviderName, ErrorInjectionPoint.BeforeWrite);
 
-            var exception = await Assert.ThrowsAsync<OrleansException>(() =>
+            var exception = await Assert.ThrowsAsync<StorageProviderInjectedError>(() =>
                 Test_PubSub_Stream(StreamProviderName, StreamId));
-
-            Assert.IsAssignableFrom<StorageProviderInjectedError>(exception.InnerException);
         }
 
         private async Task Test_PubSub_Stream(string streamProviderName, Guid streamId)
         {
             // Consumer
-            IStreamLifecycleConsumerGrain consumer = GrainClient.GrainFactory.GetGrain<IStreamLifecycleConsumerGrain>(Guid.NewGuid());
+            IStreamLifecycleConsumerGrain consumer = this.GrainFactory.GetGrain<IStreamLifecycleConsumerGrain>(Guid.NewGuid());
             await consumer.BecomeConsumer(streamId, this.StreamNamespace, streamProviderName);
 
             // Producer
-            IStreamLifecycleProducerGrain producer = GrainClient.GrainFactory.GetGrain<IStreamLifecycleProducerGrain>(Guid.NewGuid());
+            IStreamLifecycleProducerGrain producer = this.GrainFactory.GetGrain<IStreamLifecycleProducerGrain>(Guid.NewGuid());
             await producer.BecomeProducer(StreamId, this.StreamNamespace, streamProviderName);
 
             await producer.SendItem(1);
@@ -113,12 +134,10 @@ namespace UnitTests.StreamingTests
 
         private void SetErrorInjection(string providerName, ErrorInjectionPoint errorInjectionPoint)
         {
-            List<SiloHandle> silos = this.HostedCluster.GetActiveSilos().ToList();
-            foreach (var siloHandle in silos)
-            {
-                ErrorInjectionStorageProvider provider = (ErrorInjectionStorageProvider)siloHandle.Silo.TestHook.GetStorageProvider(providerName);
-                provider.SetErrorInjection(errorInjectionPoint);
-            }
+            ErrorInjectionStorageProvider.SetErrorInjection(
+                providerName,
+                new ErrorInjectionBehavior { ErrorInjectionPoint = errorInjectionPoint },
+                this.HostedCluster.GrainFactory);
         }
     }
 }

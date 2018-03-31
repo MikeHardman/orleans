@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans;
+using Orleans.Serialization;
 using UnitTests.GrainInterfaces;
 
 namespace UnitTests.Grains
@@ -9,13 +11,13 @@ namespace UnitTests.Grains
     {
         public Task<bool> SerializerExistsForType(Type t)
         {
-            return Task.FromResult(Orleans.Serialization.SerializationManager.HasSerializer(t));
+            return Task.FromResult(this.ServiceProvider.GetRequiredService<SerializationManager>().HasSerializer(t));
         }
 
         public Task TakeSerializedData(object data)
         {
             // nothing to do
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 }

@@ -29,16 +29,22 @@ namespace UnitTests.Grains
 
         public async Task<string> TraceIdDelayedEcho2()
         {
-            await TaskDone.Done;
+            await Task.CompletedTask;
             return RequestContext.Get("TraceId") as string;
         }
 
         public Task<Guid> E2EActivityId()
         {
+            return Task.FromResult(RequestContext.ActivityId);
+        }
+
+        public Task<Guid> E2ELegacyActivityId()
+        {
+            if (!RequestContext.PropagateActivityId) throw new InvalidOperationException("ActivityId propagation is not enabled on silo.");
             return Task.FromResult(Trace.CorrelationManager.ActivityId);
         }
 
-        #endregion
+#endregion
     }
 
     public class RequestContextTaskGrain : Grain, IRequestContextTaskGrain
@@ -47,11 +53,11 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = base.GetLogger();
-            return TaskDone.Done;
+            logger = this.GetLogger();
+            return Task.CompletedTask;
         }
 
-        #region Implementation of IRequestContextTaskGrain
+#region Implementation of IRequestContextTaskGrain
 
         public Task<string> TraceIdEcho()
         {
@@ -88,7 +94,7 @@ namespace UnitTests.Grains
             string traceIdOutside = RequestContext.Get("TraceId") as string;
             logger.Info(0, "{0}: Outside TraceId={1}", method, traceIdOutside);
 
-            return TaskDone.Done.ContinueWith(task =>
+            return Task.CompletedTask.ContinueWith(task =>
             {
                 string traceIdInside = RequestContext.Get("TraceId") as string;
                 logger.Info(0, "{0}: Inside TraceId={1}", method, traceIdInside);
@@ -103,7 +109,7 @@ namespace UnitTests.Grains
             string traceIdOutside = RequestContext.Get("TraceId") as string;
             logger.Info(0, "{0}: Outside TraceId={1}", method, traceIdOutside);
 
-            string traceId = await TaskDone.Done.ContinueWith(task =>
+            string traceId = await Task.CompletedTask.ContinueWith(task =>
             {
                 string traceIdInside = RequestContext.Get("TraceId") as string;
                 logger.Info(0, "{0}: Inside TraceId={1}", method, traceIdInside);
@@ -130,7 +136,7 @@ namespace UnitTests.Grains
 
         public Task<Guid> E2EActivityId()
         {
-            return Task.FromResult(Trace.CorrelationManager.ActivityId);
+            return Task.FromResult(RequestContext.ActivityId);
         }
 
         public async Task<Tuple<string, string>> TestRequestContext()
@@ -156,7 +162,7 @@ namespace UnitTests.Grains
         }
 
 
-        #endregion
+#endregion
     }
 
     public class RequestContextProxyGrain : Grain, IRequestContextProxyGrain

@@ -19,9 +19,9 @@ namespace UnitTests.Grains
         {
             EventDelay = 1000;
             Observers = new ObserverSubscriptionManager<ISimpleGrainObserver>();
-            logger = GetLogger(String.Format("{0}-{1}-{2}", typeof(SimpleObserverableGrain).Name, base.IdentityString, base.RuntimeIdentity));
+            logger = this.GetLogger(String.Format("{0}-{1}-{2}", typeof(SimpleObserverableGrain).Name, base.IdentityString, base.RuntimeIdentity));
             logger.Info("Activate.");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task SetA(int a)
@@ -80,13 +80,18 @@ namespace UnitTests.Grains
         public Task Subscribe(ISimpleGrainObserver observer)
         {
             Observers.Subscribe(observer);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task Unsubscribe(ISimpleGrainObserver observer)
         {
             Observers.Unsubscribe(observer);
-            return TaskDone.Done;
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetRuntimeInstanceId()
+        {
+            return Task.FromResult(RuntimeIdentity);
         }
 
         protected void RaiseStateUpdateEvent()

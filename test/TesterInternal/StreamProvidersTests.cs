@@ -1,155 +1,144 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using Orleans;
 using Orleans.TestingHost;
+using TestExtensions;
 using UnitTests.GrainInterfaces;
 using UnitTests.Grains;
-using UnitTests.Tester;
+using UnitTests.StreamingTests;
 using Xunit;
 using Xunit.Abstractions;
+using System.Threading.Tasks;
+using Orleans.Hosting;
+using Orleans.Runtime.Configuration;
 
 namespace UnitTests.Streaming
 {
-    public class StreamProvidersTests_ProviderConfigNotLoaded : OrleansTestingBase, IClassFixture<StreamProvidersTests_ProviderConfigNotLoaded.Fixture>
+    public class StreamProvidersTests_ProviderConfigNotLoaded : IClassFixture<StreamProvidersTests_ProviderConfigNotLoaded.Fixture>
     {
-        public class Fixture : BaseClusterFixture
+        public class Fixture : BaseTestClusterFixture
         {
-            public static Guid ServiceId = Guid.NewGuid();
-            private static readonly FileInfo SiloConfig = new FileInfo("Config_DevStorage.xml");
-            public static TestingSiloOptions SiloOptions = new TestingSiloOptions
-            {
-                SiloConfigFile = SiloConfig,
-                AdjustConfig = config =>
-                {
-                    config.Globals.ServiceId = ServiceId;
-                }
-            };
+            public string ServiceId { get; set; }
 
-            protected override TestingSiloHost CreateClusterHost()
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
             {
-                return new TestingSiloHost(SiloOptions);
+                this.ServiceId = builder.Options.ServiceId;
+                builder.Options.InitialSilosCount = 4;
+                builder.ConfigureLegacyConfiguration(legacy =>
+                {
+                    legacy.ClusterConfiguration.Globals.RegisterStorageProvider<UnitTests.StorageTests.MockStorageProvider>("test1");
+                    legacy.ClusterConfiguration.Globals.RegisterStorageProvider<UnitTests.StorageTests.MockStorageProvider>("test2");
+                    legacy.ClusterConfiguration.Globals.RegisterStorageProvider<UnitTests.StorageTests.ErrorInjectionStorageProvider>("ErrorInjector");
+                    legacy.ClusterConfiguration.Globals.RegisterStorageProvider<UnitTests.StorageTests.MockStorageProvider>("lowercase");
+                });
+                builder.AddSiloBuilderConfigurator<SiloHostConfigurator>();
+            }
+
+            public class SiloHostConfigurator : ISiloBuilderConfigurator
+            {
+                public void Configure(ISiloHostBuilder hostBuilder)
+                {
+                    hostBuilder.AddMemoryGrainStorage("MemoryStore");
+                }
             }
         }
 
-        protected TestingSiloHost HostedCluster { get; private set; }
-        private TestingSiloOptions SiloOptions;
-        private Guid ServiceId;
-        public static readonly string STREAM_PROVIDER_NAME = "SMSProvider";
+        public static readonly string STREAM_PROVIDER_NAME = StreamTestsConstants.SMS_STREAM_PROVIDER_NAME;
         private readonly ITestOutputHelper output;
+        private readonly Fixture fixture;
+        protected TestCluster HostedCluster => this.fixture.HostedCluster;
 
         public StreamProvidersTests_ProviderConfigNotLoaded(ITestOutputHelper output, Fixture fixture)
         {
+            this.fixture = fixture;
             this.output = output;
-            HostedCluster = fixture.HostedCluster;
-            SiloOptions = Fixture.SiloOptions;
-            ServiceId = Fixture.ServiceId;
         }
 
         [Fact, TestCategory("Functional"), TestCategory("Streaming"), TestCategory("Providers")]
-        public void ProvidersTests_ConfigNotLoaded()
+        public async Task ProvidersTests_ConfigNotLoaded()
         {
-            bool hasThrown = false;
             Guid streamId = Guid.NewGuid();
             var grainFullName = typeof(Streaming_ConsumerGrain).FullName;
             // consumer joins first, producer later
-            IStreaming_ConsumerGrain consumer = GrainClient.GrainFactory.GetGrain<IStreaming_ConsumerGrain>(Guid.NewGuid(), grainFullName);
-            try
-            {
-                consumer.BecomeConsumer(streamId, STREAM_PROVIDER_NAME, null).Wait();
-            }
-            catch (Exception exc)
-            {
-                hasThrown = true;
-                Exception baseException = exc.GetBaseException();
-                Assert.Equal(typeof(KeyNotFoundException), baseException.GetType());
-            }
-            Assert.True(hasThrown, "Should have thrown.");
+            IStreaming_ConsumerGrain consumer = this.HostedCluster.GrainFactory.GetGrain<IStreaming_ConsumerGrain>(Guid.NewGuid(), grainFullName);
+            await Assert.ThrowsAsync<KeyNotFoundException>(() => consumer.BecomeConsumer(streamId, STREAM_PROVIDER_NAME, null));
         }
 
         [Fact, TestCategory("Functional"), TestCategory("Config"), TestCategory("ServiceId"), TestCategory("Providers")]
-        public void ServiceId_ProviderRuntime()
+        public async Task ServiceId_ProviderRuntime()
         {
-            Guid thisRunServiceId = this.HostedCluster.Globals.ServiceId;
+            var thisRunServiceId = this.fixture.ServiceId;
 
             SiloHandle siloHandle = this.HostedCluster.GetActiveSilos().First();
-            Guid serviceId = siloHandle.Silo.GlobalConfig.ServiceId;
-            Assert.Equal(thisRunServiceId, serviceId);  // "ServiceId in Silo config"
-            serviceId = siloHandle.Silo.TestHook.ServiceId;
+            var serviceId = await this.fixture.Client.GetTestHooks(siloHandle).GetServiceId();
             Assert.Equal(thisRunServiceId, serviceId);  // "ServiceId active in silo"
-
-            // ServiceId is not currently available in client config
-            //serviceId = ClientProviderRuntime.Instance.GetServiceId();
-            //Assert.Equal(thisRunServiceId, serviceId);  // "ServiceId active in client"
         }
 
         [Fact, TestCategory("Functional"), TestCategory("Config"), TestCategory("ServiceId")]
-        public void ServiceId_SiloRestart()
+        public async Task ServiceId_SiloRestart()
         {
-            Guid configServiceId = this.HostedCluster.Globals.ServiceId;
+            var configServiceId = this.fixture.GetClientServiceId();
+            output.WriteLine("ServiceId={0}", this.fixture.ServiceId);
 
-            var initialDeploymentId = this.HostedCluster.DeploymentId;
-            output.WriteLine("DeploymentId={0} ServiceId={1}", this.HostedCluster.DeploymentId, ServiceId);
-
-            Assert.Equal(ServiceId, configServiceId);  // "ServiceId in test config"
+            Assert.Equal(this.fixture.ServiceId, configServiceId);  // "ServiceId in test config"
 
             output.WriteLine("About to reset Silos .....");
-            output.WriteLine("Stopping Silos ...");
-            this.HostedCluster.StopDefaultSilos();
-            output.WriteLine("Starting Silos ...");
-            this.HostedCluster.RedeployTestingSiloHost(SiloOptions);
+            output.WriteLine("Restarting Silos ...");
+
+            foreach (var silo in this.HostedCluster.GetActiveSilos().ToList())
+            {
+                this.HostedCluster.RestartSilo(silo);
+            }
+
             output.WriteLine("..... Silos restarted");
+            
+            var activeSilos = this.HostedCluster.GetActiveSilos().ToArray();
+            Assert.True(activeSilos.Length > 0);
 
-            output.WriteLine("DeploymentId={0} ServiceId={1}", this.HostedCluster.DeploymentId, this.HostedCluster.Globals.ServiceId);
-
-            Assert.Equal(ServiceId, this.HostedCluster.Globals.ServiceId);  // "ServiceId same after restart."
-            Assert.NotEqual(initialDeploymentId, this.HostedCluster.DeploymentId);  // "DeploymentId different after restart."
-
-            SiloHandle siloHandle = this.HostedCluster.GetActiveSilos().First();
-            Guid serviceId = siloHandle.Silo.GlobalConfig.ServiceId;
-            Assert.Equal(ServiceId, serviceId);  // "ServiceId in Silo config"
-            serviceId = siloHandle.Silo.TestHook.ServiceId;
-            Assert.Equal(ServiceId, serviceId);  // "ServiceId active in silo"
-
-            // ServiceId is not currently available in client config
-            //serviceId = ClientProviderRuntime.Instance.GetServiceId();
-            //Assert.Equal(initialServiceId, serviceId);  // "ServiceId active in client"
+            foreach (var siloHandle in activeSilos)
+            {
+                var serviceId = await this.fixture.Client.GetTestHooks(siloHandle).GetServiceId();
+                Assert.Equal(this.fixture.ServiceId, serviceId); // "ServiceId active in silo"
+            }
         }
     }
 
     public class StreamProvidersTests_ProviderConfigLoaded : OrleansTestingBase, IClassFixture<StreamProvidersTests_ProviderConfigLoaded.Fixture>
     {
-        public class Fixture : BaseClusterFixture
+        public class Fixture : BaseTestClusterFixture
         {
-            protected override TestingSiloHost CreateClusterHost()
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
             {
-                return new TestingSiloHost(new TestingSiloOptions
+                builder.Options.InitialSilosCount = 4;
+                builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+            }
+
+            public class SiloConfigurator : ISiloBuilderConfigurator
+            {
+                public void Configure(ISiloHostBuilder hostBuilder)
                 {
-                    SiloConfigFile = new FileInfo("Config_StreamProviders.xml")
-                });
+                    hostBuilder.AddSimpleMessageStreamProvider(StreamTestsConstants.SMS_STREAM_PROVIDER_NAME)
+                        .AddSimpleMessageStreamProvider("SMSProviderDoNotOptimizeForImmutableData", options => options.OptimizeForImmutableData = false)
+                        .AddMemoryGrainStorage("MemoryStore", op => op.NumStorageGrains = 1);
+                }
             }
         }
 
-        [Fact, TestCategory("Functional"), TestCategory("Streaming"), TestCategory("Providers")]
-        public void ProvidersTests_ProviderWrongName()
+        private readonly IGrainFactory grainFactory;
+        public StreamProvidersTests_ProviderConfigLoaded(Fixture fixture)
         {
-            bool hasThrown = false;
+            this.grainFactory = fixture.GrainFactory;
+        }
+
+        [Fact, TestCategory("Functional"), TestCategory("Streaming"), TestCategory("Providers")]
+        public async Task ProvidersTests_ProviderWrongName()
+        {
             Guid streamId = Guid.NewGuid();
             var grainFullName = typeof(Streaming_ConsumerGrain).FullName;
             // consumer joins first, producer later
-            IStreaming_ConsumerGrain consumer = GrainClient.GrainFactory.GetGrain<IStreaming_ConsumerGrain>(Guid.NewGuid(), grainFullName);
-            try
-            {
-                consumer.BecomeConsumer(streamId, "WrongProviderName", null).Wait();
-            }
-            catch (Exception exc)
-            {
-                Exception baseException = exc.GetBaseException();
-                Assert.Equal(typeof(KeyNotFoundException), baseException.GetType());
-            }
-            hasThrown = true;
-            Assert.True(hasThrown);
+            IStreaming_ConsumerGrain consumer = this.grainFactory.GetGrain<IStreaming_ConsumerGrain>(Guid.NewGuid(), grainFullName);
+            await Assert.ThrowsAsync<KeyNotFoundException>(() => consumer.BecomeConsumer(streamId, "WrongProviderName", null));
         }
     }
 }

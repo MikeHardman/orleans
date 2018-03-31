@@ -1,13 +1,15 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.WindowsAzure.Storage.Table;
-using Orleans.AzureUtils;
 using Orleans.Providers.Streams.PersistentStreams;
+using Orleans.Serialization;
 using Orleans.Streams;
-using Orleans.TestingHost;
+using TestExtensions;
+using Orleans.Persistence.AzureStorage;
 
 namespace Tester.TestStreamProviders
 {
@@ -15,23 +17,22 @@ namespace Tester.TestStreamProviders
     {
         private const string TableName = "TestStreamFailures";
         private const string DeploymentId = "TestDeployment";
-
-        private TestAzureTableStorageStreamFailureHandler()
-            : base(false, DeploymentId, TableName, StorageTestConstants.DataConnectionString)
+        private TestAzureTableStorageStreamFailureHandler(SerializationManager serializationManager)
+            : base(serializationManager, NullLoggerFactory.Instance, false, DeploymentId, TableName, TestDefaultConfiguration.DataConnectionString)
         {
         }
 
-        public static async Task<IStreamFailureHandler> Create()
+        public static async Task<IStreamFailureHandler> Create(SerializationManager serializationManager)
         {
-            var failureHandler = new TestAzureTableStorageStreamFailureHandler();
+            var failureHandler = new TestAzureTableStorageStreamFailureHandler(serializationManager);
             await failureHandler.InitAsync();
             return failureHandler;
         }
 
-        public static async Task<int> GetDeliveryFailureCount(string streamProviderName)
+        public static async Task<int> GetDeliveryFailureCount(string streamProviderName, ILoggerFactory loggerFactory)
         {
-            var dataManager = new AzureTableDataManager<TableEntity>(TableName, StorageTestConstants.DataConnectionString);
-            dataManager.InitTableAsync().Wait();
+            var dataManager = new AzureTableDataManager<TableEntity>(TableName, TestDefaultConfiguration.DataConnectionString, loggerFactory);
+            await dataManager.InitTableAsync();
             IEnumerable<Tuple<TableEntity, string>> deliveryErrors =
                 await
                     dataManager.ReadAllTableEntriesForPartitionAsync(
@@ -41,7 +42,7 @@ namespace Tester.TestStreamProviders
 
         public static async Task DeleteAll()
         {
-            var dataManager = new AzureTableDataManager<TableEntity>(TableName, StorageTestConstants.DataConnectionString);
+            var dataManager = new AzureTableDataManager<TableEntity>(TableName, TestDefaultConfiguration.DataConnectionString, NullLoggerFactory.Instance);
             await dataManager.InitTableAsync();
             await dataManager.DeleteTableAsync();
         }

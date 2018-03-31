@@ -12,7 +12,7 @@ namespace UnitTests.Grains
     {
         internal static Task CallNext(IGrainFactory grainFactory, List<Tuple<long, bool>> callChain, int currCallIndex)
         {
-            if (currCallIndex >= callChain.Count) return TaskDone.Done;
+            if (currCallIndex >= callChain.Count) return Task.CompletedTask;
             Tuple<long, bool> next = callChain[currCallIndex];
             bool call_1 = (currCallIndex % 2) == 1; // odd (1) call 1, even (zero) - call 2.
             if (next.Item2)
@@ -40,13 +40,13 @@ namespace UnitTests.Grains
 
         public Task CallNext_1(List<Tuple<long, bool>> callChain, int currCallIndex)
         {
-            GetLogger(Id).Info("Inside grain {0} CallNext_1().", Id);
+            this.GetLogger(Id).Info("Inside grain {0} CallNext_1().", Id);
             return DeadlockGrain.CallNext(GrainFactory, callChain, currCallIndex);
         }
 
         public Task CallNext_2(List<Tuple<long, bool>> callChain, int currCallIndex)
         {
-            GetLogger(Id).Info("Inside grain {0} CallNext_2().", Id);
+            this.GetLogger(Id).Info("Inside grain {0} CallNext_2().", Id);
             return DeadlockGrain.CallNext(GrainFactory, callChain, currCallIndex);
         }
     }
@@ -58,13 +58,13 @@ namespace UnitTests.Grains
 
         public Task CallNext_1(List<Tuple<long, bool>> callChain, int currCallIndex)
         {
-            GetLogger(Id).Info("Inside grain {0} CallNext_1()", Id);
+            this.GetLogger(Id).Info("Inside grain {0} CallNext_1()", Id);
             return DeadlockGrain.CallNext(GrainFactory, callChain, currCallIndex);
         }
 
         public Task CallNext_2(List<Tuple<long, bool>> callChain, int currCallIndex)
         {
-            GetLogger(Id).Info("Inside grain {0} CallNext_2()", Id);
+            this.GetLogger(Id).Info("Inside grain {0} CallNext_2()", Id);
             return DeadlockGrain.CallNext(GrainFactory, callChain, currCallIndex);
         }
     }

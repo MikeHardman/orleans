@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
 using Orleans.Runtime.Providers;
@@ -98,7 +99,7 @@ namespace UnitTests.Grains
             watcher = GrainFactory.GetGrain<IActivateDeactivateWatcherGrain>(0);
             return watcher.RecordActivateCall(IdentityString);
 #else
-            return TaskDone.Done;
+            return Task.CompletedTask;
 #endif
         }
 
@@ -107,7 +108,7 @@ namespace UnitTests.Grains
 #if COUNT_ACTIVATE_DEACTIVATE
             return watcher.RecordDeactivateCall(IdentityString);
 #else
-            return TaskDone.Done;
+            return Task.CompletedTask;
 #endif
         }
 
@@ -145,13 +146,22 @@ namespace UnitTests.Grains
     }
 
     [Orleans.Providers.StorageProvider(ProviderName = "MemoryStore")]
-    public class StreamLifecycleConsumerGrain : StreamLifecycleTestGrainBase, IStreamLifecycleConsumerGrain
+    internal class StreamLifecycleConsumerGrain : StreamLifecycleTestGrainBase, IStreamLifecycleConsumerGrain
     {
+        protected readonly ISiloRuntimeClient runtimeClient;
+        protected readonly IStreamProviderRuntime streamProviderRuntime;
+
+        public StreamLifecycleConsumerGrain(ISiloRuntimeClient runtimeClient, IStreamProviderRuntime streamProviderRuntime)
+        {
+            this.runtimeClient = runtimeClient;
+            this.streamProviderRuntime = streamProviderRuntime;
+        }
+
         protected IDictionary<StreamSubscriptionHandle<int>, MyStreamObserver<int>> Observers { get; set; }
 
         public override async Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + IdentityString);
+            logger = this.GetLogger(GetType().Name + "-" + IdentityString);
             if (logger.IsVerbose) logger.Verbose("OnActivateAsync");
 
             await RecordActivate();
@@ -202,7 +212,7 @@ namespace UnitTests.Grains
         public Task Ping()
         {
             logger.Info("Ping");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public virtual async Task BecomeConsumer(Guid streamId, string streamNamespace, string providerToUse)
@@ -227,8 +237,8 @@ namespace UnitTests.Grains
 #if USE_CAST
             myExtensionReference = StreamConsumerExtensionFactory.Cast(this.AsReference());
 #else
-            var tup = await SiloProviderRuntime.Instance.BindExtension<StreamConsumerExtension, IStreamConsumerExtension>(
-                        () => new StreamConsumerExtension(SiloProviderRuntime.Instance, _streamProvider.IsRewindable));
+            var tup = await runtimeClient.BindExtension<StreamConsumerExtension, IStreamConsumerExtension>(
+                        () => new StreamConsumerExtension(streamProviderRuntime));
             StreamConsumerExtension myExtension = tup.Item1;
             myExtensionReference = tup.Item2;
 #endif
@@ -267,17 +277,23 @@ namespace UnitTests.Grains
     }
 
     [Orleans.Providers.StorageProvider(ProviderName = "MemoryStore")]
-    public class FilteredStreamConsumerGrain : StreamLifecycleConsumerGrain, IFilteredStreamConsumerGrain
+    internal class FilteredStreamConsumerGrain : StreamLifecycleConsumerGrain, IFilteredStreamConsumerGrain
     {
         private static Logger _logger;
 
         private const int FilterDataOdd = 1;
         private const int FilterDataEven = 2;
 
+        public FilteredStreamConsumerGrain(ISiloRuntimeClient runtimeClient, IStreamProviderRuntime streamProviderRuntime)
+            : base(runtimeClient, streamProviderRuntime)
+        {
+        }
+
         public override Task BecomeConsumer(Guid streamId, string streamNamespace, string providerName)
         {
             throw new InvalidOperationException("Should not be calling unfiltered BecomeConsumer method on " + GetType());
         }
+
         public async Task BecomeConsumer(Guid streamId, string streamNamespace, string providerName, bool sendEvensOnly)
         {
             _logger = logger;
@@ -357,7 +373,7 @@ namespace UnitTests.Grains
     {
         public override async Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + IdentityString);
+            logger = this.GetLogger(GetType().Name + "-" + IdentityString);
             if (logger.IsVerbose) logger.Verbose("OnActivateAsync");
 
             await RecordActivate();
@@ -394,7 +410,7 @@ namespace UnitTests.Grains
         public Task Ping()
         {
             logger.Info("Ping");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task SendItem(int item)
@@ -480,7 +496,7 @@ namespace UnitTests.Grains
                 logger.Verbose("Received OnNextAsync - Item={0} - Total Items={1} Errors={2}", item, NumItems, NumErrors);
             }
 
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task OnCompletedAsync()
@@ -489,7 +505,7 @@ namespace UnitTests.Grains
             {
                 logger.Info("Receive OnCompletedAsync - Total Items={0} Errors={1}", NumItems, NumErrors);
             }
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task OnErrorAsync(Exception ex)
@@ -501,7 +517,7 @@ namespace UnitTests.Grains
                 logger.Warn(1, "Received OnErrorAsync - Exception={0} - Total Items={1} Errors={2}", ex, NumItems, NumErrors);
             }
 
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 
@@ -518,6 +534,6 @@ namespace UnitTests.Grains
 
     internal class ClosedTypeStreamSubscriptionHandle : StreamSubscriptionHandleImpl<StreamSubscriptionHandleArg>
     {
-        public ClosedTypeStreamSubscriptionHandle() : base(null, null, false) { /* not a subject to the creation */ }
+        public ClosedTypeStreamSubscriptionHandle() : base(null, null) { /* not a subject to the creation */ }
     }
 }

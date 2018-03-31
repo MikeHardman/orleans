@@ -7,6 +7,8 @@ using Orleans;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.Storage;
+using TestExtensions;
+using UnitTests.Persistence;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -19,33 +21,19 @@ namespace UnitTests.StorageTests
         Memory,
         Mock,
         File,
-        Sql
+        AdoNet
     }
-
-    public class LocalStoreTestsFixture : IDisposable
-    {
-        public LocalStoreTestsFixture()
-        {
-            BufferPool.InitGlobalBufferPool(new MessagingConfiguration(false));
-
-            ClientConfiguration cfg = ClientConfiguration.LoadFromFile("ClientConfigurationForTesting.xml");
-            LogManager.Initialize(cfg);
-        }
-
-        public void Dispose()
-        {
-            LocalDataStoreInstance.LocalDataStore = null;
-        }
-    }
-
-    public class LocalStoreTests : IClassFixture<LocalStoreTestsFixture>
+    
+    [Collection(TestEnvironmentFixture.DefaultCollection)]
+    public class LocalStoreTests
     {
         private readonly ITestOutputHelper output;
+        private readonly TestEnvironmentFixture fixture;
 
-        public LocalStoreTests(ITestOutputHelper output)
+        public LocalStoreTests(ITestOutputHelper output, TestEnvironmentFixture fixture)
         {
             this.output = output;
-            LocalDataStoreInstance.LocalDataStore = null;
+            this.fixture = fixture;
         }
 
         [Fact, TestCategory("Functional"), TestCategory("Persistence"), TestCategory("MemoryStore")]
@@ -55,7 +43,7 @@ namespace UnitTests.StorageTests
 
             ILocalDataStore store = new HierarchicalKeyStore(2);
 
-            GrainReference reference = GrainReference.FromGrainId(GrainId.NewId());
+            GrainReference reference = this.fixture.InternalGrainFactory.GetGrain(GrainId.NewId());
             TestStoreGrainState state = new TestStoreGrainState();
             var stateProperties = AsDictionary(state);
             var keys = GetKeys(name, reference);
@@ -77,7 +65,7 @@ namespace UnitTests.StorageTests
 
             ILocalDataStore store = new HierarchicalKeyStore(2);
 
-            GrainReference reference = GrainReference.FromGrainId(GrainId.NewId());
+            GrainReference reference = fixture.InternalGrainFactory.GetGrain(GrainId.NewId());
             var state = TestStoreGrainState.NewRandomState();
             Stopwatch sw = new Stopwatch();
             sw.Start();
@@ -101,7 +89,7 @@ namespace UnitTests.StorageTests
 
             ILocalDataStore store = new HierarchicalKeyStore(2);
 
-            GrainReference reference = GrainReference.FromGrainId(GrainId.NewId());
+            GrainReference reference = this.fixture.InternalGrainFactory.GetGrain(GrainId.NewId());
             var data = TestStoreGrainState.NewRandomState();
 
             output.WriteLine("Using store = {0}", store.GetType().FullName);
@@ -187,7 +175,7 @@ namespace UnitTests.StorageTests
 
             ILocalDataStore store = new HierarchicalKeyStore(2);
 
-            GrainReference reference = GrainReference.FromGrainId(GrainId.NewId());
+            GrainReference reference = this.fixture.InternalGrainFactory.GetGrain(GrainId.NewId());
             var grainState = TestStoreGrainState.NewRandomState();
             var state = grainState.State;
             Stopwatch sw = new Stopwatch();
@@ -227,41 +215,4 @@ namespace UnitTests.StorageTests
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
         }
     }
-
-    #region Grain State class for these tests
-
-    [Serializable]
-    public class TestStoreGrainState
-    {
-        public string A { get; set; }
-        public int B { get; set; }
-        public long C { get; set; }
-
-        internal static GrainState<TestStoreGrainState> NewRandomState(int? aPropertyLength = null)
-        {
-            return new GrainState<TestStoreGrainState>
-            {
-                State = new TestStoreGrainState
-                {
-                    A = aPropertyLength == null
-                        ? TestConstants.random.Next().ToString(CultureInfo.InvariantCulture)
-                        : GenerateRandomDigitString(aPropertyLength.Value),
-                    B = TestConstants.random.Next(),
-                    C = TestConstants.random.Next()
-                }
-            };
-        }
-
-        private static string GenerateRandomDigitString(int stringLength)
-        {
-            var characters = new char[stringLength];
-            for (var i = 0; i < stringLength; ++i)
-            {
-                characters[i] = (char)TestConstants.random.Next('0', '9' + 1);
-            }
-            return new string(characters);
-        }
-    }
-
-    #endregion Grain State class for these tests
 }

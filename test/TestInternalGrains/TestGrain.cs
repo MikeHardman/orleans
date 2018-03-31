@@ -19,7 +19,7 @@ namespace UnitTests.Grains
             if (this.GetPrimaryKeyLong() == -2)
                 throw new ArgumentException("Primary key cannot be -2 for this test case");
 
-            logger = GetLogger("TestGrain " + Data.Address);
+            logger = this.GetLogger("TestGrain " + Data.Address);
             label = this.GetPrimaryKeyLong().ToString();
             logger.Info("OnActivateAsync");
 
@@ -54,7 +54,7 @@ namespace UnitTests.Grains
         {
             this.label = label;
             logger.Info("SetLabel {0} received", label);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task StartTimer()
@@ -62,13 +62,13 @@ namespace UnitTests.Grains
             logger.Info("StartTimer.");
             timer = base.RegisterTimer(TimerTick, null, TimeSpan.Zero, TimeSpan.FromSeconds(10));
             
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         private Task TimerTick(object data)
         {
             logger.Info("TimerTick.");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task<Tuple<string, string>> TestRequestContext()
@@ -142,10 +142,10 @@ namespace UnitTests.Grains
             //    throw new ArgumentException("Primary key cannot be -2 for this test case");
 
             label = this.GetPrimaryKey().ToString();
-            logger = GetLogger("GuidTestGrain " + Data.Address);
+            logger = this.GetLogger("GuidTestGrain " + Data.Address);
             logger.Info("OnActivateAsync");
 
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         #region Implementation of ITestGrain
@@ -163,7 +163,7 @@ namespace UnitTests.Grains
         public Task SetLabel(string label)
         {
             this.label = label;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<string> GetRuntimeInstanceId()
@@ -177,5 +177,63 @@ namespace UnitTests.Grains
         }
 
         #endregion
+    }
+
+    public class OneWayGrain : Grain, IOneWayGrain
+    {
+        private int count;
+
+        public Task Notify()
+        {
+            this.count++;
+            return Task.CompletedTask;
+        }
+
+        public Task Notify(ISimpleGrainObserver observer)
+        {
+            this.count++;
+            observer.StateChanged(this.count - 1, this.count);
+            return Task.CompletedTask;
+        }
+
+        public async Task<bool> NotifyOtherGrain(IOneWayGrain otherGrain, ISimpleGrainObserver observer)
+        {
+            var task = otherGrain.Notify(observer);
+            var completedSynchronously = task.Status == TaskStatus.RanToCompletion;
+            await task;
+            return completedSynchronously;
+        }
+
+        public Task<int> GetCount() => Task.FromResult(this.count);
+
+        public Task ThrowsOneWay()
+        {
+            throw new Exception("GET OUT!");
+        }
+    }
+
+    public class CanBeOneWayGrain : Grain, ICanBeOneWayGrain
+    {
+        private int count;
+
+        public Task Notify()
+        {
+            this.count++;
+            return Task.CompletedTask;
+        }
+
+        public Task Notify(ISimpleGrainObserver observer)
+        {
+            this.count++;
+            observer.StateChanged(this.count - 1, this.count);
+            return Task.CompletedTask;
+        }
+
+        public Task<int> GetCount() => Task.FromResult(this.count);
+
+        public Task Throws()
+        {
+            throw new Exception("GET OUT!");
+        }
     }
 }

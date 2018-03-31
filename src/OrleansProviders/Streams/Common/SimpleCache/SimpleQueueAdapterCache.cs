@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Concurrent;
-using Orleans.Runtime;
+using Microsoft.Extensions.Logging;
+using Orleans.Configuration;
 using Orleans.Streams;
+using System;
 
 namespace Orleans.Providers.Streams.Common
 {
@@ -11,26 +11,25 @@ namespace Orleans.Providers.Streams.Common
     public class SimpleQueueAdapterCache : IQueueAdapterCache
     {
         /// <summary>
-        /// Cache size propery name for configuration
+        /// Cache size property name for configuration
         /// </summary>
         public const string CacheSizePropertyName = "CacheSize";
 
         private readonly int cacheSize;
-        private readonly Logger logger;
-        private readonly ConcurrentDictionary<QueueId, IQueueCache> caches;
+        private readonly string providerName;
+        private readonly ILoggerFactory loggerFactory;
 
         /// <summary>
         /// Adapter for simple queue caches
         /// </summary>
-        /// <param name="cacheSize"></param>
-        /// <param name="logger"></param>
-        public SimpleQueueAdapterCache(int cacheSize, Logger logger)
+        /// <param name="options"></param>
+        /// <param name="providerName"></param>
+        /// <param name="loggerFactory"></param>
+        public SimpleQueueAdapterCache(SimpleQueueCacheOptions options, string providerName, ILoggerFactory loggerFactory)
         {
-            if (cacheSize <= 0)
-                throw new ArgumentOutOfRangeException("cacheSize", "CacheSize must be a positive number.");
-            this.cacheSize = cacheSize;
-            this.logger = logger;
-            caches = new ConcurrentDictionary<QueueId, IQueueCache>();
+            this.cacheSize = options.CacheSize;
+            this.loggerFactory = loggerFactory;
+            this.providerName = providerName;
         }
 
         /// <summary>
@@ -39,11 +38,11 @@ namespace Orleans.Providers.Streams.Common
         /// <param name="queueId"></param>
         public IQueueCache CreateQueueCache(QueueId queueId)
         {
-            return caches.AddOrUpdate(queueId, (id) => new SimpleQueueCache(cacheSize, logger), (id, queueCache) => queueCache);
+            return new SimpleQueueCache(cacheSize, this.loggerFactory.CreateLogger($"{typeof(SimpleQueueCache).FullName}.{providerName}.{queueId}"));
         }
 
         /// <summary>
-        /// Parce the size property from configuration
+        /// Parse the size property from configuration
         /// </summary>
         /// <param name="config"></param>
         /// <param name="defaultSize"></param>

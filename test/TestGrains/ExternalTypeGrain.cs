@@ -8,15 +8,12 @@ using UnitTests.GrainInterfaces;
 
 namespace UnitTests.Grains
 {
-    /// <summary>
-    /// A simple grain that allows to set two arguments and then multiply them.
-    /// </summary>
     public class ExternalTypeGrain : Grain, IExternalTypeGrain
     {
         public Task GetAbstractModel(IEnumerable<NameObjectCollectionBase> list)
         {
-            base.GetLogger().Verbose("GetAbstractModel: Success");
-            return TaskDone.Done;
+            this.GetLogger().Verbose("GetAbstractModel: Success");
+            return Task.CompletedTask;
         }
 
         public Task<EnumClass> GetEnumModel()

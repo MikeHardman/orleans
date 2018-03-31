@@ -6,13 +6,16 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Orleans;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.TestingHost;
+using Orleans.TestingHost.Utils;
+using TestExtensions;
 using UnitTests.GrainInterfaces;
-using UnitTests.Tester;
 using Xunit;
+using Tester;
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable UnusedVariable
@@ -21,7 +24,7 @@ namespace UnitTests.TimerTests
 {
     public class ReminderTests_Base : OrleansTestingBase, IDisposable
     {
-        protected TestingSiloHost HostedCluster { get; private set; }
+        protected TestCluster HostedCluster { get; private set; }
         internal static readonly TimeSpan LEEWAY = TimeSpan.FromMilliseconds(100); // the experiment shouldnt be that long that the sums of leeways exceeds a period
         internal static readonly TimeSpan ENDWAIT = TimeSpan.FromMinutes(5);
 
@@ -34,26 +37,30 @@ namespace UnitTests.TimerTests
         protected const long failAfter = 2; // NOTE: match this sleep with 'failCheckAfter' used in PerGrainFailureTest() so you dont try to get counter immediately after failure as new activation may not have the reminder statistics
         protected const long failCheckAfter = 6; // safe value: 9
 
-        protected Logger log;
+        protected ILogger log;
 
-        public ReminderTests_Base(BaseClusterFixture fixture)
+        public ReminderTests_Base(BaseTestClusterFixture fixture)
         {
             HostedCluster = fixture.HostedCluster;
+            GrainFactory = fixture.GrainFactory;
 
-            ClientConfiguration cfg = ClientConfiguration.LoadFromFile("ClientConfigurationForTesting.xml");
-            LogManager.Initialize(cfg);
+            ClientConfiguration configuration = ClientConfiguration.LoadFromFile("ClientConfigurationForTesting.xml");
+            var filters = new LoggerFilterOptions();
 #if DEBUG
-            LogManager.AddTraceLevelOverride("Storage", Severity.Verbose3);
-            LogManager.AddTraceLevelOverride("Reminder", Severity.Verbose3);
+            filters.AddFilter("Storage", LogLevel.Trace);
+            filters.AddFilter("Reminder", LogLevel.Trace);
 #endif
-            log = LogManager.GetLogger(this.GetType().Name, LoggerType.Application);
+
+            log = TestingUtils.CreateDefaultLoggerFactory(TestingUtils.CreateTraceFileName(configuration.ClientName, configuration.ClusterId), filters).CreateLogger<ReminderTests_Base>();
         }
+
+        public IGrainFactory GrainFactory { get; }
 
         public void Dispose()
         {
             // ReminderTable.Clear() cannot be called from a non-Orleans thread,
             // so we must proxy the call through a grain.
-            var controlProxy = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            var controlProxy = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
             controlProxy.EraseReminderTable().WaitWithThrow(TestConstants.InitTimeout);
         }
 
@@ -61,7 +68,7 @@ namespace UnitTests.TimerTests
         #region Basic test
         public async Task Test_Reminders_Basic_StopByRef()
         {
-            IReminderTestGrain2 grain = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 grain = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
 
             IGrainReminder r1 = await grain.StartReminder(DR);
             IGrainReminder r2 = await grain.StartReminder(DR);
@@ -94,7 +101,7 @@ namespace UnitTests.TimerTests
         {
             Guid id = Guid.NewGuid();
             log.Info("Start Grain Id = {0}", id);
-            IReminderTestGrain2 grain = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(id);
+            IReminderTestGrain2 grain = this.GrainFactory.GetGrain<IReminderTestGrain2>(id);
             const int count = 5;
             Task<IGrainReminder>[] startReminderTasks = new Task<IGrainReminder>[count];
             for (int i = 0; i < count; i++)
@@ -135,11 +142,11 @@ namespace UnitTests.TimerTests
         #region Single join ... multi grain, multi reminders
         public async Task Test_Reminders_1J_MultiGrainMultiReminders()
         {
-            IReminderTestGrain2 g1 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
-            IReminderTestGrain2 g2 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
-            IReminderTestGrain2 g3 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
-            IReminderTestGrain2 g4 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
-            IReminderTestGrain2 g5 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g1 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g2 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g3 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g4 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g5 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
 
             TimeSpan period = await g1.GetReminderPeriod(DR);
 
@@ -155,7 +162,7 @@ namespace UnitTests.TimerTests
             Thread.Sleep(period.Multiply(5));
             // start another silo ... although it will take it a while before it stabilizes
             log.Info("Starting another silo");
-            this.HostedCluster.StartAdditionalSilos(1);
+            await this.HostedCluster.StartAdditionalSilos(1, true);
 
             //Block until all tasks complete.
             await Task.WhenAll(tasks).WithTimeout(ENDWAIT);
@@ -164,7 +171,7 @@ namespace UnitTests.TimerTests
 
         public async Task Test_Reminders_ReminderNotFound()
         {
-            IReminderTestGrain2 g1 = GrainClient.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
+            IReminderTestGrain2 g1 = this.GrainFactory.GetGrain<IReminderTestGrain2>(Guid.NewGuid());
 
             // request a reminder that does not exist
             IGrainReminder reminder = await g1.GetReminderObject("blarg");
@@ -179,7 +186,7 @@ namespace UnitTests.TimerTests
             // for churn cases, we do execute start and stop reminders with retries as we don't have the queue-ing 
             // functionality implemented on the LocalReminderService yet
             TimeSpan period = await g.GetReminderPeriod(DR);
-            logger.Info("PerGrainMultiReminderTestChurn Period={0} Grain={1}", period, g);
+            this.log.Info("PerGrainMultiReminderTestChurn Period={0} Grain={1}", period, g);
 
             // Start Default Reminder
             //g.StartReminder(DR, file + "_" + DR).Wait();
@@ -233,7 +240,7 @@ namespace UnitTests.TimerTests
         {
             TimeSpan period = await grain.GetReminderPeriod(DR);
 
-            logger.Info("PerGrainFailureTest Period={0} Grain={1}", period, grain);
+            this.log.Info("PerGrainFailureTest Period={0} Grain={1}", period, grain);
 
             await grain.StartReminder(DR);
             TimeSpan sleepFor = period.Multiply(failCheckAfter) + LEEWAY; // giving some leeway
@@ -257,7 +264,7 @@ namespace UnitTests.TimerTests
         {
             TimeSpan period = await g.GetReminderPeriod(DR);
 
-            logger.Info("PerGrainMultiReminderTest Period={0} Grain={1}", period, g);
+            this.log.Info("PerGrainMultiReminderTest Period={0} Grain={1}", period, g);
 
             // Each reminder is started 2 periods after the previous reminder
             // once all reminders have been started, stop them every 2 periods
@@ -328,7 +335,7 @@ namespace UnitTests.TimerTests
         {
             TimeSpan period = await grain.GetReminderPeriod(DR);
 
-            logger.Info("PerCopyGrainFailureTest Period={0} Grain={1}", period, grain);
+            this.log.Info("PerCopyGrainFailureTest Period={0} Grain={1}", period, grain);
 
             await grain.StartReminder(DR);
             Thread.Sleep(period.Multiply(failCheckAfter) + LEEWAY); // giving some leeway
@@ -359,7 +366,7 @@ namespace UnitTests.TimerTests
             sb.AppendFormat(
                 " -- Expecting value in the range between {0} and {1}, and got value {2}.",
                 lowerLimit, upperLimit, val);
-            logger.Info(sb.ToString());
+            this.log.Info(sb.ToString());
 
             bool tickCountIsInsideRange = lowerLimit <= val && val <= upperLimit;
 

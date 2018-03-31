@@ -27,7 +27,7 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger("ChainedGrain-" + IdentityString);
+            logger = this.GetLogger("ChainedGrain-" + IdentityString);
             return base.OnActivateAsync();
         }
 
@@ -58,16 +58,21 @@ namespace UnitTests.Grains
         public Task SetNext(IChainedGrain next)
         {
             State.Next = next;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
+        public Task SetNextNested(ChainGrainHolder next)
+        {
+            State.Next = next.Next;
+            return Task.CompletedTask;
+        }
 
         public Task Validate(bool nextIsSet)
         {
             if ((nextIsSet && State.Next != null) || (!nextIsSet && State.Next == null))
             {
                 // logger.Verbose("Id={0} validated successfully: Next={1}", State.Id, State.Next);
-                return TaskDone.Done;
+                return Task.CompletedTask;
             }
 
             string msg = String.Format("ChainGrain Id={0} is in an invalid state. Next={1}", State.Id, State.Next);
@@ -78,6 +83,21 @@ namespace UnitTests.Grains
         public Task PassThis(IChainedGrain next)
         {
             return next.SetNext(this);
+        }
+
+        public Task PassNull(IChainedGrain next)
+        {
+            return next.SetNext(null);
+        }
+
+        public Task PassThisNested(ChainGrainHolder next)
+        {
+            return next.Next.SetNextNested(new ChainGrainHolder { Next = this });
+        }
+
+        public Task PassNullNested(ChainGrainHolder next)
+        {
+            return next.Next.SetNextNested(new ChainGrainHolder { Next = null });
         }
 
         #endregion

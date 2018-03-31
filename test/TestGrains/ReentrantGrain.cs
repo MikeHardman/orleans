@@ -2,8 +2,11 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Orleans;
+using Orleans.CodeGeneration;
 using Orleans.Concurrency;
 using Orleans.Runtime;
+using Orleans.Streams;
+
 using UnitTests.GrainInterfaces;
 
 namespace UnitTests.Grains
@@ -26,7 +29,7 @@ namespace UnitTests.Grains
         public Task SetSelf(IReentrantGrain self)
         {
             Self = self;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 
@@ -38,7 +41,7 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger();
+            logger = this.GetLogger();
             logger.Info("OnActivateAsync");
             return base.OnActivateAsync();
         }
@@ -64,7 +67,85 @@ namespace UnitTests.Grains
         {
             logger.Info("SetSelf {0}", self);
             Self = self;
-            return TaskDone.Done;
+            return Task.CompletedTask;
+        }
+    }
+
+    [MayInterleave(nameof(MayInterleave))]
+    public class MayInterleavePredicateGrain : Grain, IMayInterleavePredicateGrain
+    {
+        public static bool MayInterleave(InvokeMethodRequest req)
+        {
+            // not interested
+            if (req.Arguments.Length == 0)
+                return false;
+
+            string arg = null;
+
+            // assume single argument message
+            if (req.Arguments.Length == 1)
+                arg = (string)UnwrapImmutable(req.Arguments[0]);
+
+            // assume stream message
+            if (req.Arguments.Length == 2)
+                arg = (string)UnwrapImmutable(req.Arguments[1]);
+
+            if (arg == "err")
+                throw new ApplicationException("boom");
+
+            return arg == "reentrant";
+        }
+
+        static object UnwrapImmutable(object item) => item is Immutable<object> ? ((Immutable<object>)item).Value : item;
+
+        private IMayInterleavePredicateGrain Self { get; set; }
+
+        // this interleaves only when arg == "reentrant" 
+        // and test predicate will throw when arg = "err"
+        public Task<string> One(string arg)
+        {
+            return Task.FromResult("one");
+        }
+
+        public async Task<string> Two()
+        {
+            return await Self.One("") + " two";
+        }
+
+        public async Task<string> TwoReentrant()
+        {
+            return await Self.One("reentrant") + " two";
+        }
+
+        public Task Exceptional()
+        {
+            return Self.One("err");
+        }
+
+        public async Task SubscribeToStream()
+        {
+            var stream = GetStream();
+
+            await stream.SubscribeAsync((item, _) =>
+            {
+                var logger = this.GetLogger();
+                logger.Info("Received stream item:" + item);
+                return Task.CompletedTask;
+            });
+        }
+
+        public Task PushToStream(string item)
+        {
+            return GetStream().OnNextAsync(item);
+        }
+
+        IAsyncStream<string> GetStream() => 
+            GetStreamProvider("sms").GetStream<string>(Guid.Empty, "test-stream-interleave");
+
+        public Task SetSelf(IMayInterleavePredicateGrain self)
+        {
+            Self = self;
+            return Task.CompletedTask;
         }
     }
 
@@ -85,7 +166,7 @@ namespace UnitTests.Grains
         public Task SetSelf(IUnorderedNonReentrantGrain self)
         {
             Self = self;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
     [Reentrant]
@@ -96,8 +177,8 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public Task<int> GetCounter()
@@ -108,7 +189,7 @@ namespace UnitTests.Grains
         public Task SetDestination(long id)
         {
             destination = id;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task Ping(int seconds)
@@ -139,8 +220,8 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public Task<int> GetCounter()
@@ -151,7 +232,7 @@ namespace UnitTests.Grains
         public Task SetDestination(long id)
         {
             destination = id;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task Ping(int seconds)
@@ -183,8 +264,8 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public async Task FanOutReentrant(int offset, int num)
@@ -299,8 +380,8 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public async Task FanOutACReentrant(int offset, int num)
@@ -413,14 +494,14 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public Task SetDestination(long id)
         {
             otherId = id;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task Ping(TimeSpan wait)
@@ -447,14 +528,14 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
-            return TaskDone.Done;
+            logger = this.GetLogger(GetType().Name + "-" + this.GetPrimaryKeyLong());
+            return Task.CompletedTask;
         }
 
         public Task SetDestination(long id)
         {
             otherId = id;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task Ping(TimeSpan wait)

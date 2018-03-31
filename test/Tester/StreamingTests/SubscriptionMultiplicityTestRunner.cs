@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Orleans;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
 using Orleans.Streams;
+using Orleans.TestingHost;
 using Orleans.TestingHost.Utils;
 using UnitTests.GrainInterfaces;
 using Xunit;
@@ -15,23 +17,25 @@ namespace UnitTests.StreamingTests
     {
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
         private readonly string streamProviderName;
-        private readonly Logger logger;
+        private readonly ILogger logger;
+        private readonly TestCluster testCluster;
 
-        public SubscriptionMultiplicityTestRunner(string streamProviderName, Logger logger)
+        public SubscriptionMultiplicityTestRunner(string streamProviderName, TestCluster testCluster)
         {
             if (string.IsNullOrWhiteSpace(streamProviderName))
             {
                 throw new ArgumentNullException("streamProviderName");
             }
             this.streamProviderName = streamProviderName;
-            this.logger = logger;
+            this.logger = testCluster.Client.ServiceProvider.GetRequiredService<ILogger<SubscriptionMultiplicityTestRunner>>();
+            this.testCluster = testCluster;
         }
 
         public async Task MultipleParallelSubscriptionTest(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             // setup two subscriptions
             StreamSubscriptionHandle<int> firstSubscriptionHandle = await consumer.BecomeConsumer(streamGuid, streamNamespace, streamProviderName);
@@ -55,8 +59,8 @@ namespace UnitTests.StreamingTests
         public async Task MultipleLinearSubscriptionTest(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer.BecomeProducer(streamGuid, streamNamespace, streamProviderName);
 
@@ -91,8 +95,8 @@ namespace UnitTests.StreamingTests
         public async Task MultipleSubscriptionTest_AddRemove(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer.BecomeProducer(streamGuid, streamNamespace, streamProviderName);
 
@@ -138,8 +142,8 @@ namespace UnitTests.StreamingTests
         public async Task ResubscriptionTest(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer.BecomeProducer(streamGuid, streamNamespace, streamProviderName);
 
@@ -170,8 +174,8 @@ namespace UnitTests.StreamingTests
         public async Task ResubscriptionAfterDeactivationTest(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer.BecomeProducer(streamGuid, streamNamespace, streamProviderName);
 
@@ -213,7 +217,7 @@ namespace UnitTests.StreamingTests
             const int subscriptionCount = 10;
 
             // get producer and consumer
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             // create expected subscriptions
             IEnumerable<Task<StreamSubscriptionHandle<int>>> subscriptionTasks =
@@ -264,8 +268,8 @@ namespace UnitTests.StreamingTests
             const string streamNamespace2 = "streamNamespace2";
 
             // send events on first stream /////////////////////////////
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer.BecomeProducer(streamGuid, streamNamespace1, streamProviderName);
 
@@ -278,8 +282,8 @@ namespace UnitTests.StreamingTests
             await TestingUtils.WaitUntilAsync(lastTry => CheckCounters(producer, consumer, 1, lastTry), Timeout);
 
             // send some events on second stream /////////////////////////////
-            var producer2 = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
-            var consumer2 = GrainClient.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
+            var producer2 = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var consumer2 = this.testCluster.GrainFactory.GetGrain<IMultipleSubscriptionConsumerGrain>(Guid.NewGuid());
 
             await producer2.BecomeProducer(streamGuid, streamNamespace2, streamProviderName);
 
@@ -305,15 +309,15 @@ namespace UnitTests.StreamingTests
         public async Task SubscribeFromClientTest(Guid streamGuid, string streamNamespace)
         {
             // get producer and consumer
-            var producer = GrainClient.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
+            var producer = this.testCluster.GrainFactory.GetGrain<ISampleStreaming_ProducerGrain>(Guid.NewGuid());
             int eventCount = 0;
 
-            var provider = GrainClient.GetStreamProvider(streamProviderName);
+            var provider = this.testCluster.Client.ServiceProvider.GetServiceByName<IStreamProvider>(streamProviderName);
             var stream = provider.GetStream<int>(streamGuid, streamNamespace);
             var handle = await stream.SubscribeAsync((e,t) =>
             {
                 eventCount++;
-                return TaskDone.Done;
+                return Task.CompletedTask;
             });
 
             // produce some messages

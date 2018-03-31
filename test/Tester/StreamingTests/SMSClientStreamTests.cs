@@ -1,11 +1,14 @@
-﻿
+
 using System;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Orleans;
+using Orleans.Hosting;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.TestingHost;
+using TestExtensions;
 using UnitTests.StreamingTests;
-using UnitTests.Tester;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -24,15 +27,31 @@ namespace Tester.StreamingTests
             runner = new ClientStreamTestRunner(this.HostedCluster);
         }
 
-        public override TestCluster CreateTestCluster()
+        protected override void ConfigureTestCluster(TestClusterBuilder builder)
         {
-            var options = new TestClusterOptions(1);
-            options.ClusterConfiguration.AddMemoryStorageProvider("PubSubStore");
-            options.ClusterConfiguration.AddSimpleMessageStreamProvider(SMSStreamProviderName);
-            options.ClusterConfiguration.Globals.ClientDropTimeout = TimeSpan.FromSeconds(5);
+            builder.Options.InitialSilosCount = 1;
+            builder.ConfigureLegacyConfiguration(legacy =>
+            {
+                legacy.ClusterConfiguration.Globals.ClientDropTimeout = TimeSpan.FromSeconds(5);
+            });
+            builder.AddClientBuilderConfigurator<ClientConfiguretor>();
+            builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        }
 
-            options.ClientConfiguration.AddSimpleMessageStreamProvider(SMSStreamProviderName);
-            return new TestCluster(options);
+        public class SiloConfigurator : ISiloBuilderConfigurator
+        {
+            public void Configure(ISiloHostBuilder hostBuilder)
+            {
+                hostBuilder.AddSimpleMessageStreamProvider(SMSStreamProviderName)
+                     .AddMemoryGrainStorage("PubSubStore");
+            }
+        }
+        public class ClientConfiguretor : IClientBuilderConfigurator
+        {
+            public void Configure(IConfiguration configuration, IClientBuilder clientBuilder)
+            {
+                clientBuilder.AddSimpleMessageStreamProvider(SMSStreamProviderName);
+            }
         }
 
         [Fact, TestCategory("SlowBVT"), TestCategory("Functional"), TestCategory("Streaming")]

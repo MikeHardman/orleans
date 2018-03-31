@@ -2,31 +2,32 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Orleans;
-using Orleans.TestingHost;
-using Tester;
+using TestExtensions;
 using UnitTests.GrainInterfaces;
-using UnitTests.Tester;
 using Xunit;
 
 namespace UnitTests.CancellationTests
 {
     public class GrainCancellationTokenTests : OrleansTestingBase, IClassFixture<GrainCancellationTokenTests.Fixture>
     {
-        private class Fixture : BaseTestClusterFixture
+        private readonly Fixture fixture;
+
+        public class Fixture : BaseTestClusterFixture
         {
-            protected override TestCluster CreateTestCluster()
-            {
-                return new TestCluster(new TestClusterOptions(2));
-            }
+        }
+
+        public GrainCancellationTokenTests(Fixture fixture)
+        {
+            this.fixture = fixture;
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)] disabled until resolve of the https://github.com/dotnet/orleans/issues/1891
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task GrainTaskCancellation(int delay)
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
             var tcs = new GrainCancellationTokenSource();
             var grainTask = grain.LongWait(tcs.Token, TimeSpan.FromSeconds(10));
             await Task.Delay(TimeSpan.FromMilliseconds(delay));
@@ -35,14 +36,14 @@ namespace UnitTests.CancellationTests
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)]
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task MultipleGrainsTaskCancellation(int delay)
         {
             var tcs = new GrainCancellationTokenSource();
             var grainTasks = Enumerable.Range(0, 5)
-                .Select(i => GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid())
+                .Select(i => this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid())
                             .LongWait(tcs.Token, TimeSpan.FromSeconds(10)))
                             .Select(task => Assert.ThrowsAsync<TaskCanceledException>(() => task)).ToList();
             await Task.Delay(TimeSpan.FromMilliseconds(delay));
@@ -53,7 +54,7 @@ namespace UnitTests.CancellationTests
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
         public async Task TokenPassingWithoutCancellation_NoExceptionShouldBeThrown()
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
             var tcs = new GrainCancellationTokenSource();
             try
             {
@@ -68,7 +69,7 @@ namespace UnitTests.CancellationTests
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
         public async Task PreCancelledTokenPassing()
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
             var tcs = new GrainCancellationTokenSource();
             await tcs.Cancel();
             var grainTask = grain.LongWait(tcs.Token, TimeSpan.FromSeconds(10));
@@ -78,13 +79,13 @@ namespace UnitTests.CancellationTests
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
         public async Task CancellationTokenCallbacksExecutionContext()
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
             var tcs = new GrainCancellationTokenSource();
             var grainTask = grain.CancellationTokenCallbackResolve(tcs.Token);
             await Task.Delay(TimeSpan.FromMilliseconds(100));
             await tcs.Cancel();
             var result = await grainTask;
-            Assert.Equal(true, result);
+            Assert.True(result);
         }
 
         [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
@@ -96,13 +97,13 @@ namespace UnitTests.CancellationTests
             var grainTask = grains.Item1.CallOtherCancellationTokenCallbackResolve(grains.Item2);
             await tcs.Cancel();
             var result = await grainTask;
-            Assert.Equal(true, result);
+            Assert.True(result);
         }
 
-        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
+        [Fact, TestCategory("Cancellation")]
         public async Task CancellationTokenCallbacksThrow_ExceptionShouldBePropagated()
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<bool>>(Guid.NewGuid());
             var tcs = new GrainCancellationTokenSource();
             var grainTask = grain.CancellationTokenCallbackThrow(tcs.Token);
             await Task.Delay(TimeSpan.FromMilliseconds(100));
@@ -120,8 +121,8 @@ namespace UnitTests.CancellationTests
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)]
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task InSiloGrainCancellation(int delay)
         {
@@ -129,8 +130,8 @@ namespace UnitTests.CancellationTests
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)]
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task InterSiloGrainCancellation(int delay)
         {
@@ -138,8 +139,8 @@ namespace UnitTests.CancellationTests
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)]
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task InterSiloClientCancellationTokenPassing(int delay)
         {
@@ -147,8 +148,8 @@ namespace UnitTests.CancellationTests
         }
 
         [Theory, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Cancellation")]
-        // [InlineData(0)]
-        // [InlineData(10)]
+        [InlineData(0)]
+        [InlineData(10)]
         [InlineData(300)]
         public async Task InSiloClientCancellationTokenPassing(int delay)
         {
@@ -179,9 +180,9 @@ namespace UnitTests.CancellationTests
 
         private async Task<Tuple<ILongRunningTaskGrain<T1>, ILongRunningTaskGrain<T1>>> GetGrains<T1>(bool placeOnDifferentSilos = true)
         {
-            var grain = GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
+            var grain = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
             var instanceId = await grain.GetRuntimeInstanceId();
-            var target = GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
+            var target = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
             var targetInstanceId = await target.GetRuntimeInstanceId();
             var retriesCount = 0;
             var retriesLimit = 10;
@@ -190,7 +191,7 @@ namespace UnitTests.CancellationTests
                 || (!placeOnDifferentSilos && !instanceId.Equals(targetInstanceId)))
             {
                 if (retriesCount >= retriesLimit) throw new Exception("Could not make requested grains placement");
-                target = GrainClient.GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
+                target = this.fixture.GrainFactory.GetGrain<ILongRunningTaskGrain<T1>>(Guid.NewGuid());
                 targetInstanceId = await target.GetRuntimeInstanceId();
                 retriesCount++;
             }

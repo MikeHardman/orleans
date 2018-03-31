@@ -5,10 +5,10 @@ using System.Text;
 using System.Threading.Tasks;
 using Orleans;
 using Orleans.Runtime;
-using Tester;
+using Orleans.TestingHost;
+using TestExtensions;
 using UnitTests.GrainInterfaces;
 using UnitTests.Grains;
-using UnitTests.Tester;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -16,19 +16,32 @@ using Xunit.Abstractions;
 
 namespace UnitTests.Management
 {
-    public class ManagementGrainTests : HostedTestClusterEnsureDefaultStarted
+    public class ManagementGrainTests :  OrleansTestingBase, IClassFixture<ManagementGrainTests.Fixture>
     {
+        private readonly Fixture fixture;
         private readonly ITestOutputHelper output;
-        private IManagementGrain mgmtGrain;
+        private readonly IManagementGrain mgmtGrain;
         
-        public ManagementGrainTests(DefaultClusterFixture fixture, ITestOutputHelper output)
-            : base(fixture)
+        public ManagementGrainTests(Fixture fixture, ITestOutputHelper output)
         {
+            this.fixture = fixture;
             this.output = output;
-            mgmtGrain = GrainClient.GrainFactory.GetGrain<IManagementGrain>(RuntimeInterfaceConstants.SYSTEM_MANAGEMENT_ID);
+            mgmtGrain = this.fixture.Client.GetGrain<IManagementGrain>(0);
         }
 
-        [Fact, TestCategory("Functional"), TestCategory("Management")]
+        private TestCluster HostedCluster => this.fixture.HostedCluster;
+
+        public class Fixture : BaseTestClusterFixture
+        {
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
+            {
+                // The ActivationCount tests rely on CounterStatistic, which is a shared static value, so isolation
+                // between silos is obtained using AppDomains.
+                builder.CreateSilo = AppDomainSiloHandle.Create;
+            }
+        }
+
+        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Management")]
         public async Task GetHosts()
         {
             if (HostedCluster.SecondarySilos.Count == 0)
@@ -43,7 +56,7 @@ namespace UnitTests.Management
             Assert.Equal(numberOfActiveSilos, siloStatuses.Count);
         }
 
-        [Fact, TestCategory("Functional"), TestCategory("Management")]
+        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Management")]
         public async Task GetDetailedHosts()
         {
             if (HostedCluster.SecondarySilos.Count == 0)
@@ -59,10 +72,10 @@ namespace UnitTests.Management
         }
 
 
-        [Fact, TestCategory("Functional"), TestCategory("Management")]
+        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Management")]
         public void GetSimpleGrainStatistics()
         {
-            SimpleGrainStatistic[] stats = GetSimpleGrainStatistics("Initial");
+            SimpleGrainStatistic[] stats = this.GetSimpleGrainStatisticsRunner("Initial");
             Assert.True(stats.Length > 0, "Got some grain statistics: " + stats.Length);
             foreach (var s in stats)
             {
@@ -70,13 +83,13 @@ namespace UnitTests.Management
             }
         }
 
-        [Fact, TestCategory("Functional"), TestCategory("Management")]
+        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Management")]
         public void GetSimpleGrainStatistics_ActivationCounts()
         {
             RunGetStatisticsTest<ISimpleGrain, SimpleGrain>(g => g.GetA().Wait());
         }
 
-        [Fact, TestCategory("Functional"), TestCategory("Management")]
+        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("Management")]
         public void GetTestGrainStatistics_ActivationCounts()
         {
             RunGetStatisticsTest<ITestGrain, TestGrain>(g => g.GetKey().Wait());
@@ -86,22 +99,22 @@ namespace UnitTests.Management
             where TGrainInterface : IGrainWithIntegerKey
             where TGrain : TGrainInterface
         {
-            SimpleGrainStatistic[] stats = GetSimpleGrainStatistics("Before Create");
+            SimpleGrainStatistic[] stats = this.GetSimpleGrainStatisticsRunner("Before Create");
             Assert.True(stats.Length > 0, "Got some grain statistics: " + stats.Length);
 
             string grainType = typeof(TGrain).FullName;
             int initialStatisticsCount = stats.Count(s => s.GrainType == grainType);
             int initialActivationsCount = stats.Where(s => s.GrainType == grainType).Sum(s => s.ActivationCount);
-            var grain1 = GrainClient.GrainFactory.GetGrain<TGrainInterface>(random.Next());
+            var grain1 = this.fixture.Client.GetGrain<TGrainInterface>(random.Next());
             callGrainMethodAction(grain1); // Call grain method
-            stats = GetSimpleGrainStatistics("After Invoke");
+            stats = this.GetSimpleGrainStatisticsRunner("After Invoke");
             Assert.True(stats.Count(s => s.GrainType == grainType) >= initialStatisticsCount, "Activation counter now exists for grain: " + grainType);
             int expectedActivationsCount = initialActivationsCount + 1;
             int actualActivationsCount = stats.Where(s => s.GrainType == grainType).Sum(s => s.ActivationCount);
             Assert.Equal(expectedActivationsCount, actualActivationsCount);
         }
 
-        private SimpleGrainStatistic[] GetSimpleGrainStatistics(string when)
+        private SimpleGrainStatistic[] GetSimpleGrainStatisticsRunner(string when)
         {
             SimpleGrainStatistic[] stats = mgmtGrain.GetSimpleGrainStatistics(null).Result;
             StringBuilder sb = new StringBuilder();

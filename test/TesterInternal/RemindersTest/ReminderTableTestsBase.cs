@@ -4,56 +4,51 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Orleans;
-using Orleans.AzureUtils;
 using Orleans.Runtime;
-using Orleans.Runtime.Configuration;
-using UnitTests.StorageTests;
+using TestExtensions;
+using UnitTests.MembershipTests;
 using Xunit;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
+using Orleans.TestingHost.Utils;
 
 namespace UnitTests.RemindersTest
 {
+    [Collection(TestEnvironmentFixture.DefaultCollection)]
     public abstract class ReminderTableTestsBase : IDisposable, IClassFixture<ConnectionStringFixture>
     {
-        private readonly Logger logger;
+        protected readonly TestEnvironmentFixture ClusterFixture;
+        private readonly ILogger logger;
 
         private readonly IReminderTable remindersTable;
+        protected ILoggerFactory loggerFactory;
+        protected IOptions<ClusterOptions> clusterOptions;
+
+        protected ConnectionStringFixture connectionStringFixture;
 
         protected const string testDatabaseName = "OrleansReminderTest";//for relational storage
-        
-        protected ReminderTableTestsBase(ConnectionStringFixture fixture)
+
+        protected ReminderTableTestsBase(ConnectionStringFixture fixture, TestEnvironmentFixture clusterFixture, LoggerFilterOptions filters)
         {
-            LogManager.Initialize(new NodeConfiguration());
+            this.connectionStringFixture = fixture;
+            fixture.InitializeConnectionStringAccessor(GetConnectionString);
+            loggerFactory = TestingUtils.CreateDefaultLoggerFactory($"{this.GetType()}.log", filters);
+            this.ClusterFixture = clusterFixture;
+            logger = loggerFactory.CreateLogger<ReminderTableTestsBase>();
+            var serviceId = Guid.NewGuid().ToString();
+            var clusterId = "test-" + serviceId;
+
+            logger.Info("ClusterId={0}", clusterId);
+            this.clusterOptions = Options.Create(new ClusterOptions { ClusterId = clusterId, ServiceId = serviceId });
             
-            logger = LogManager.GetLogger(GetType().Name, LoggerType.Application);
-            var serviceId = Guid.NewGuid();
-            var deploymentId = "test-" + serviceId;
-
-            logger.Info("DeploymentId={0}", deploymentId);
-
-            lock (fixture.SyncRoot)
-            {
-                if (fixture.ConnectionString == null)
-                    fixture.ConnectionString = GetConnectionString();
-            }
-
-            var globalConfiguration = new GlobalConfiguration
-            {
-                ServiceId = serviceId,
-                DeploymentId = deploymentId,
-                AdoInvariantForReminders = GetAdoInvariant(),
-                DataConnectionStringForReminders = fixture.ConnectionString
-            };
-
             var rmndr = CreateRemindersTable();
-            rmndr.Init(globalConfiguration, logger).WithTimeout(TimeSpan.FromMinutes(1)).Wait();
+            rmndr.Init().WithTimeout(TimeSpan.FromMinutes(1)).Wait();
             remindersTable = rmndr;
         }
 
         public virtual void Dispose()
         {
-            // Reset init timeout after tests
-            OrleansSiloInstanceManager.initTimeout = AzureTableDefaultPolicies.TableCreationTimeout;
-
             if (remindersTable != null && SiloInstanceTableTestConstants.DeleteEntriesAfterTest)
             {
                 remindersTable.TestOnlyClearTable().Wait();
@@ -61,7 +56,7 @@ namespace UnitTests.RemindersTest
         }
 
         protected abstract IReminderTable CreateRemindersTable();
-        protected abstract string GetConnectionString();
+        protected abstract Task<string> GetConnectionString();
 
         protected virtual string GetAdoInvariant()
         {
@@ -70,12 +65,18 @@ namespace UnitTests.RemindersTest
 
         protected async Task RemindersParallelUpsert()
         {
-            var upserts = await Task.WhenAll(Enumerable.Range(0, 50).Select(i =>
+            var upserts = await Task.WhenAll(Enumerable.Range(0, 5).Select(i =>
             {
                 var reminder = CreateReminder(MakeTestGrainReference(), i.ToString());
-                return Task.WhenAll(Enumerable.Range(1, 5).Select(j => remindersTable.UpsertRow(reminder)));
+                return Task.WhenAll(Enumerable.Range(1, 5).Select(j =>
+                {
+                    return RetryHelper.RetryOnExceptionAsync<string>(5, RetryOperation.Sigmoid, async () =>
+                    {
+                        return await remindersTable.UpsertRow(reminder);
+                    });
+                }));
             }));
-            Assert.False(upserts.Any(i => i.Distinct().Count() != 5));
+            Assert.DoesNotContain(upserts, i => i.Distinct().Count() != 5);
         }
 
         protected async Task ReminderSimple()
@@ -84,7 +85,7 @@ namespace UnitTests.RemindersTest
             await remindersTable.UpsertRow(reminder);
 
             var readReminder = await remindersTable.ReadRow(reminder.GrainRef, reminder.ReminderName);
-            
+
             string etagTemp = reminder.ETag = readReminder.ETag;
 
             Assert.Equal(JsonConvert.SerializeObject(readReminder), JsonConvert.SerializeObject(reminder));
@@ -108,7 +109,12 @@ namespace UnitTests.RemindersTest
             await Task.WhenAll(Enumerable.Range(1, iterations).Select(async i =>
             {
                 GrainReference grainRef = MakeTestGrainReference();
-                await remindersTable.UpsertRow(CreateReminder(grainRef, i.ToString()));
+
+                await RetryHelper.RetryOnExceptionAsync<Task>(10, RetryOperation.Sigmoid, async () =>
+                {
+                    await remindersTable.UpsertRow(CreateReminder(grainRef, i.ToString()));
+                    return Task.CompletedTask;
+                });
             }));
 
             var rows = await remindersTable.ReadRows(0, uint.MaxValue);
@@ -120,7 +126,7 @@ namespace UnitTests.RemindersTest
             Assert.Equal(rows.Reminders.Count, iterations);
 
             var remindersHashes = rows.Reminders.Select(r => r.GrainRef.GetUniformHashCode()).ToArray();
-            
+
             SafeRandom random = new SafeRandom();
 
             await Task.WhenAll(Enumerable.Range(0, iterations).Select(i =>
@@ -156,10 +162,10 @@ namespace UnitTests.RemindersTest
             };
         }
 
-        private static GrainReference MakeTestGrainReference()
+        private GrainReference MakeTestGrainReference()
         {
             GrainId regularGrainId = GrainId.GetGrainIdForTesting(Guid.NewGuid());
-            GrainReference grainRef = GrainReference.FromGrainId(regularGrainId);
+            GrainReference grainRef = this.ClusterFixture.InternalGrainFactory.GetGrain(regularGrainId);
             return grainRef;
         }
     }

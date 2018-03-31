@@ -1,8 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Threading.Tasks;
 using Orleans;
+using Orleans.Messaging;
 using Orleans.Runtime;
+using Orleans.Versions.Compatibility;
+using Orleans.Versions.Selector;
 
 namespace OrleansManager
 {
@@ -10,13 +16,15 @@ namespace OrleansManager
     {
         private static IManagementGrain systemManagement;
 
+        private static IInternalClusterClient client;
+
         static void Main(string[] args)
         {
             Console.WriteLine("Invoked OrleansManager.exe with arguments {0}", Utils.EnumerableToString(args));
 
             var command = args.Length > 0 ? args[0].ToLowerInvariant() : "";
 
-            if (String.IsNullOrEmpty(command) || command.Equals("/?") || command.Equals("-?"))
+            if (string.IsNullOrEmpty(command) || command.Equals("/?") || command.Equals("-?"))
             {
                 PrintUsage();
                 Environment.Exit(-1);
@@ -36,48 +44,64 @@ namespace OrleansManager
 
         private static void RunCommand(string command, string[] args)
         {
-            GrainClient.Initialize();
-
-            systemManagement = GrainClient.GrainFactory.GetGrain<IManagementGrain>(RuntimeInterfaceConstants.SYSTEM_MANAGEMENT_ID);
-            Dictionary<string, string> options = args.Skip(1)
-                .Where(s => s.StartsWith("-"))
-                .Select(s => s.Substring(1).Split('='))
-                .ToDictionary(a => a[0].ToLowerInvariant(), a => a.Length > 1 ? a[1] : "");
-
-            var restWithoutOptions = args.Skip(1).Where(s => !s.StartsWith("-")).ToArray();
-
-            switch (command)
+            var clientBuilder = new ClientBuilder()
+                .LoadConfiguration();
+            using (client = (IInternalClusterClient)clientBuilder.Build())
             {
-                case "grainstats":
-                    PrintSimpleGrainStatistics(restWithoutOptions);
-                    break;
+                client.Connect().Wait();
+                systemManagement = client.GetGrain<IManagementGrain>(0);
+                var options = args.Skip(1)
+                                  .Where(s => s.StartsWith("-"))
+                                  .Select(s => s.Substring(1).Split('='))
+                                  .ToDictionary(a => a[0].ToLowerInvariant(), a => a.Length > 1 ? a[1] : "");
 
-                case "fullgrainstats":
-                    PrintGrainStatistics(restWithoutOptions);
-                    break;
+                var restWithoutOptions = args.Skip(1).Where(s => !s.StartsWith("-")).ToArray();
 
-                case "collect":
-                    CollectActivations(options, restWithoutOptions);
-                    break;
+                switch (command)
+                {
+                    case "grainstats":
+                        PrintSimpleGrainStatistics(restWithoutOptions);
+                        break;
 
-                case "unregister":
-                    var unregisterArgs = args.Skip(1).ToArray();
-                    UnregisterGrain(unregisterArgs);
-                    break;
+                    case "fullgrainstats":
+                        PrintGrainStatistics(restWithoutOptions);
+                        break;
 
-                case "lookup":
-                    var lookupArgs = args.Skip(1).ToArray();
-                    LookupGrain(lookupArgs);
-                    break;
+                    case "collect":
+                        CollectActivations(options, restWithoutOptions);
+                        break;
 
-                case "grainreport":
-                    var grainReportArgs = args.Skip(1).ToArray();
-                    GrainReport(grainReportArgs);
-                    break;
+                    case "unregister":
+                        var unregisterArgs = args.Skip(1).ToArray();
+                        UnregisterGrain(unregisterArgs);
+                        break;
 
-                default:
-                    PrintUsage();
-                    break;
+                    case "lookup":
+                        var lookupArgs = args.Skip(1).ToArray();
+                        LookupGrain(lookupArgs);
+                        break;
+
+                    case "grainreport":
+                        var grainReportArgs = args.Skip(1).ToArray();
+                        GrainReport(grainReportArgs);
+                        break;
+
+                    case "setcompatibilitystrategy":
+                        var setCompatStrategyArgs = args.Skip(1).ToArray();
+                        SetCompatibilityStrategy(setCompatStrategyArgs);
+                        break;
+
+                    case "setselectorstrategy":
+                        var setSelStrategyArgs = args.Skip(1).ToArray();
+                        SetSelStrategyArgs(setSelStrategyArgs);
+                        break;
+
+                    default:
+                        PrintUsage();
+                        break;
+                }
+                
+                client.Close().Wait();
             }
         }
 
@@ -89,7 +113,9 @@ namespace OrleansManager
     OrleansManager collect [-memory=nnn] [-age=nnn] [silo1 silo2 ...]
     OrleansManager unregister <grain interface type code (int)|grain implementation class name (string)> <grain id long|grain id Guid>
     OrleansManager lookup <grain interface type code (int)|grain implementation class name (string)> <grain id long|grain id Guid>
-    OrleansManager grainReport <grain interface type code (int)|grain implementation class name (string)> <grain id long|grain id Guid>");
+    OrleansManager grainReport <grain interface type code (int)|grain implementation class name (string)> <grain id long|grain id Guid>
+    OrleansManager setCompatibilityStrategy <CompatibilityStrategy (string)> [<grain interface type code (int)>]
+    OrleansManager setSelectorStrategy <VersionSelectorStrategy (string)> [<grain interface type code (int>])");
         }
 
         private static void CollectActivations(IReadOnlyDictionary<string, string> options, IEnumerable<string> args)
@@ -99,7 +125,7 @@ namespace OrleansManager
             string s;
 
             if (options.TryGetValue("age", out s))
-                Int32.TryParse(s, out ageLimitSeconds);
+                int.TryParse(s, out ageLimitSeconds);
 
             var ageLimit = TimeSpan.FromSeconds(ageLimitSeconds);
             if (ageLimit > TimeSpan.Zero)
@@ -132,7 +158,7 @@ namespace OrleansManager
         {
             var grainId = ConstructGrainId(args, "GrainReport");
 
-            var silos = GetSiloAddresses();
+            var silos = GetSiloAddresses().GetResult();
             if (silos == null || silos.Count == 0) return;
 
             var reports = new List<DetailedGrainReport>();
@@ -141,7 +167,7 @@ namespace OrleansManager
                 WriteStatus(string.Format("**Calling GetDetailedGrainReport({0}, {1})", silo, grainId));
                 try
                 {
-                    var siloControl = GrainClient.InternalGrainFactory.GetSystemTarget<ISiloControl>(Constants.SiloControlId, silo);
+                    var siloControl = client.GetSystemTarget<ISiloControl>(Constants.SiloControlId, silo);
                     DetailedGrainReport grainReport = siloControl.GetDetailedGrainReport(grainId).Result;
                     reports.Add(grainReport);
                 }
@@ -163,7 +189,7 @@ namespace OrleansManager
             var silo = GetSiloAddress();
             if (silo == null) return;
 
-            var directory = GrainClient.InternalGrainFactory.GetSystemTarget<IRemoteGrainDirectory>(Constants.DirectoryServiceId, silo);
+            var directory = client.GetSystemTarget<IRemoteGrainDirectory>(Constants.DirectoryServiceId, silo);
 
             WriteStatus(string.Format("**Calling DeleteGrain({0}, {1})", silo, grainId));
             directory.DeleteGrainAsync(grainId).Wait();
@@ -177,7 +203,7 @@ namespace OrleansManager
             var silo = GetSiloAddress();
             if (silo == null) return;
 
-            var directory = GrainClient.InternalGrainFactory.GetSystemTarget<IRemoteGrainDirectory>(Constants.DirectoryServiceId, silo);
+            var directory = client.GetSystemTarget<IRemoteGrainDirectory>(Constants.DirectoryServiceId, silo);
   
             WriteStatus(string.Format("**Calling LookupGrain({0}, {1})", silo, grainId));
             //Tuple<List<Tuple<SiloAddress, ActivationId>>, int> lookupResult = await directory.FullLookUp(grainId, true);
@@ -213,40 +239,114 @@ namespace OrleansManager
             int interfaceTypeCodeDataLong;
             long implementationTypeCode;
 
-            if (Int32.TryParse(interfaceTypeCodeOrImplClassName, out interfaceTypeCodeDataLong))
+            var grainTypeResolver = (IGrainTypeResolver)client.ServiceProvider.GetService(typeof(IGrainTypeResolver));
+            if (int.TryParse(interfaceTypeCodeOrImplClassName, out interfaceTypeCodeDataLong))
             {
                 // parsed it as int, so it is an interface type code.
-                implementationTypeCode = TypeCodeMapper.GetImplementation(interfaceTypeCodeDataLong).GrainTypeCode;
+                implementationTypeCode =
+                    GetImplementation(grainTypeResolver, interfaceTypeCodeDataLong).GrainTypeCode;
             }
             else
             {
                 // interfaceTypeCodeOrImplClassName is the implementation class name
-                implementationTypeCode = TypeCodeMapper.GetImplementation(interfaceTypeCodeOrImplClassName).GrainTypeCode;
+                implementationTypeCode = GetImplementation(grainTypeResolver, interfaceTypeCodeOrImplClassName).GrainTypeCode;
             }
 
             var grainIdStr = args[1];
             GrainId grainId = null;
             long grainIdLong;
             Guid grainIdGuid;
-            if (Int64.TryParse(grainIdStr, out grainIdLong))
+            if (long.TryParse(grainIdStr, out grainIdLong))
                 grainId = GrainId.GetGrainId(implementationTypeCode, grainIdLong);
             else if (Guid.TryParse(grainIdStr, out grainIdGuid))
                 grainId = GrainId.GetGrainId(implementationTypeCode, grainIdGuid);
+            else 
+                grainId = GrainId.GetGrainId(implementationTypeCode, grainIdStr);
             
             WriteStatus(string.Format("**Full Grain Id to {0} is: GrainId = {1}", operation, grainId.ToFullString()));
             return grainId;
         }
 
+        private static void SetSelStrategyArgs(string[] args)
+        {
+            int? interfaceId;
+            VersionSelectorStrategy strategy;
+            if (!GetStrategyArgs(args, ParseVersionSelectorStrategy, out strategy, out interfaceId))
+                return;
+            if (interfaceId != null)
+                systemManagement.SetSelectorStrategy(interfaceId.Value, strategy);
+            else
+                systemManagement.SetSelectorStrategy(strategy);
+        }
+
+        private static VersionSelectorStrategy ParseVersionSelectorStrategy(string str)
+        {
+            // TODO - what about custom?
+            if (str.Equals(typeof(AllCompatibleVersions).Name))
+                return AllCompatibleVersions.Singleton;
+            if (str.Equals(typeof(LatestVersion).Name))
+                return LatestVersion.Singleton;
+            if (str.Equals(typeof(MinimumVersion).Name))
+                return MinimumVersion.Singleton;
+            return null;
+        }
+
+        private static void SetCompatibilityStrategy(string[] args)
+        {
+            int? interfaceId;
+            CompatibilityStrategy strategy;
+            if (!GetStrategyArgs(args, ParseCompatibilityStrategy, out strategy, out interfaceId))
+                return;
+            if (interfaceId != null)
+                systemManagement.SetCompatibilityStrategy(interfaceId.Value, strategy);
+            else
+                systemManagement.SetCompatibilityStrategy(strategy);
+        }
+
+        private static CompatibilityStrategy ParseCompatibilityStrategy(string str)
+        {
+            // TODO - what about custom?
+            if (str.Equals(typeof(AllVersionsCompatible).Name))
+                return AllVersionsCompatible.Singleton;
+            if (str.Equals(typeof(BackwardCompatible).Name))
+                return BackwardCompatible.Singleton;
+            if (str.Equals(typeof(StrictVersionCompatible).Name))
+                return StrictVersionCompatible.Singleton;
+            return null;
+        }
+
+        private static bool GetStrategyArgs<T>(string[] args, Func<string, T> strategyParser, out T strategy, out int? interfaceId)
+        {
+            if (args.Length < 1 || args.Length > 2)
+            {
+                PrintUsage();
+                strategy = default(T);
+                interfaceId = null;
+                return true;
+            }
+            strategy = strategyParser(args[0]);
+            if (strategy == null)
+            {
+                Console.WriteLine($"Strategy ${args[0]} not found");
+                strategy = default(T);
+                interfaceId = null;
+                return false;
+            }
+            interfaceId = args.Length == 2 ? (int?)int.Parse(args[1]) : null;
+            return true;
+        }
+
         private static SiloAddress GetSiloAddress()
         {
-            List<SiloAddress> silos = GetSiloAddresses();
+            List<SiloAddress> silos = GetSiloAddresses().GetResult();
             if (silos == null || silos.Count==0) return null;
             return silos.FirstOrDefault();
         }
 
-        private static List<SiloAddress> GetSiloAddresses()
+        private static async Task<List<SiloAddress>> GetSiloAddresses()
         {
-            IList<Uri> gateways = GrainClient.Gateways;
+            var gatewayProvider = (IGatewayListProvider) client.ServiceProvider.GetService(typeof(IGatewayListProvider));
+            IList<Uri> gateways = await gatewayProvider.GetGateways();
             if (gateways.Count >= 1) 
                 return gateways.Select(Utils.ToSiloAddress).ToList();
 
@@ -269,6 +369,28 @@ namespace OrleansManager
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(msg);
             Console.ResetColor();
+        }
+
+        internal static GrainClassData GetImplementation(IGrainTypeResolver grainTypeResolver, int interfaceId, string grainClassNamePrefix = null)
+        {
+            GrainClassData implementation;
+            if (grainTypeResolver.TryGetGrainClassData(interfaceId, out implementation, grainClassNamePrefix)) return implementation;
+
+            var loadedAssemblies = grainTypeResolver.GetLoadedGrainAssemblies();
+            throw new ArgumentException(
+                string.Format("Cannot find an implementation class for grain interface: {0}{2}. Make sure the grain assembly was correctly deployed and loaded in the silo.{1}",
+                              interfaceId,
+                              string.IsNullOrEmpty(loadedAssemblies) ? string.Empty : string.Format(" Loaded grain assemblies: {0}", loadedAssemblies),
+                              string.IsNullOrEmpty(grainClassNamePrefix) ? string.Empty : ", grainClassNamePrefix=" + grainClassNamePrefix));
+        }
+
+        internal static GrainClassData GetImplementation(IGrainTypeResolver grainTypeResolver, string grainImplementationClassName)
+        {
+            GrainClassData implementation;
+            if (!grainTypeResolver.TryGetGrainClassData(grainImplementationClassName, out implementation))
+                throw new ArgumentException(string.Format("Cannot find an implementation grain class: {0}. Make sure the grain assembly was correctly deployed and loaded in the silo.", grainImplementationClassName));
+
+            return implementation;
         }
     }
 }

@@ -13,6 +13,7 @@ namespace UnitTestGrains
 {
     public class TimerGrain : Grain, ITimerGrain
     {
+        private bool deactivating;
         int counter = 0;
         Dictionary<string, IDisposable> allTimers;
         IDisposable defaultTimer;
@@ -24,25 +25,28 @@ namespace UnitTestGrains
 
         public override Task OnActivateAsync()
         {
-            logger = (Logger)this.GetLogger("TimerGrain_" + base.Data.Address.ToString());
+            ThrowIfDeactivating();
+            logger = this.GetLogger("TimerGrain_" + base.Data.Address.ToString());
             context = RuntimeContext.Current.ActivationContext;
-            defaultTimer = this.RegisterTimer(Tick, DefaultTimerName, TimeSpan.Zero, period);
+            defaultTimer = this.RegisterTimer(Tick, DefaultTimerName, period, period);
             allTimers = new Dictionary<string, IDisposable>();
-            return TaskDone.Done;
-        }
-        public Task StopDefaultTimer()
-        {
-            defaultTimer.Dispose();
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
+        public Task StopDefaultTimer()
+        {
+            ThrowIfDeactivating();
+            defaultTimer.Dispose();
+            return Task.CompletedTask;
+        }
         private Task Tick(object data)
         {
             counter++;
             logger.Info(data.ToString() + " Tick # " + counter + " RuntimeContext = " + RuntimeContext.Current.ActivationContext.ToString());
 
             // make sure we run in the right activation context.
-            logger.Assert(ErrorCode.Runtime_Error_100146, Equals(context, RuntimeContext.Current.ActivationContext));
+            if(!Equals(context, RuntimeContext.Current.ActivationContext))
+                logger.Error((int)ErrorCode.Runtime_Error_100146, "grain not running in the right activation context");
 
             string name = (string)data;
             IDisposable timer = null;
@@ -54,53 +58,70 @@ namespace UnitTestGrains
             {
                 timer = allTimers[(string)data];
             }
-            logger.Assert(ErrorCode.Runtime_Error_100146, timer != null);
+            if(timer == null)
+                logger.Error((int)ErrorCode.Runtime_Error_100146, "Timer is null");
             if (timer != null && counter > 10000)
             {
                 // do not let orphan timers ticking for long periods
                 timer.Dispose();
             }
 
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<TimeSpan> GetTimerPeriod()
         {
-            return Task<TimeSpan>.FromResult(period);
+            return Task.FromResult(period);
         }
 
         public Task<int> GetCounter()
         {
-            return Task<int>.FromResult(counter);
+            ThrowIfDeactivating();
+            return Task.FromResult(counter);
         }
         public Task SetCounter(int value)
         {
+            ThrowIfDeactivating();
             lock (this)
             {
                 counter = value;
             }
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
         public Task StartTimer(string timerName)
         {
+            ThrowIfDeactivating();
             IDisposable timer = this.RegisterTimer(Tick, timerName, TimeSpan.Zero, period);
             allTimers.Add(timerName, timer);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task StopTimer(string timerName)
         {
+            ThrowIfDeactivating();
             IDisposable timer = allTimers[timerName];
             timer.Dispose();
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task LongWait(TimeSpan time)
         {
+            ThrowIfDeactivating();
             Thread.Sleep(time);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
+        public Task Deactivate()
+        {
+            deactivating = true;
+            DeactivateOnIdle();
+            return Task.CompletedTask;
+        }
+
+        private void ThrowIfDeactivating()
+        {
+            if (deactivating) throw new InvalidOperationException("This activation is deactivating");
+        }
     }
 
     public class TimerCallGrain : Grain, ITimerCallGrain
@@ -122,7 +143,7 @@ namespace UnitTestGrains
             logger = this.GetLogger("TimerCallGrain_" + base.Data.Address);
             context = RuntimeContext.Current.ActivationContext;
             activationTaskScheduler = TaskScheduler.Current;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task StartTimer(string name, TimeSpan delay)
@@ -130,7 +151,7 @@ namespace UnitTestGrains
             logger.Info("StartTimer Name={0} Delay={1}", name, delay);
             this.timerName = name;
             this.timer = base.RegisterTimer(TimerTick, name, delay, Constants.INFINITE_TIMESPAN); // One shot timer
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task StopTimer(string name)
@@ -141,7 +162,7 @@ namespace UnitTestGrains
                 throw new ArgumentException(string.Format("Wrong timer name: Expected={0} Actual={1}", this.timerName, name));
             }
             timer.Dispose();
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         private async Task TimerTick(object data)

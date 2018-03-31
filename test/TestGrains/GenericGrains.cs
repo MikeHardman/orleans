@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Orleans;
@@ -29,13 +30,13 @@ namespace UnitTests.Grains
         public Task SetA(T a)
         {
             State.A = a;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task SetB(T b)
         {
             State.B = b;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<string> GetAxB()
@@ -52,7 +53,7 @@ namespace UnitTests.Grains
     }
 
     [StorageProvider(ProviderName = "AzureStore")]
-    public class SimpleGenericGrainUsingAzureTableStorage<T> : Grain<SimpleGenericGrainState<T>>, ISimpleGenericGrainUsingAzureTableStorage<T>
+    public class SimpleGenericGrainUsingAzureStorageAndLongGrainName<T> : Grain<SimpleGenericGrainState<T>>, ISimpleGenericGrainUsingAzureStorageAndLongGrainName<T>
     {
         public async Task<T> EchoAsync(T entity)
         {
@@ -101,13 +102,13 @@ namespace UnitTests.Grains
         public Task SetA(U a)
         {
             State.A = a;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task SetB(U b)
         {
             State.B = b;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<string> GetAxB()
@@ -141,13 +142,13 @@ namespace UnitTests.Grains
         public Task SetA(T a)
         {
             State.A = a;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task SetB(U b)
         {
             State.B = b;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<string> GetAxB()
@@ -199,7 +200,7 @@ namespace UnitTests.Grains
         public Task AddItem(string item)
         {
             State.Items.Add(item);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<IList<string>> GetItems()
@@ -228,7 +229,7 @@ namespace UnitTests.Grains
         public Task AddItem(T item)
         {
             State.Items.Add(item);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<IList<T>> GetItems()
@@ -272,7 +273,7 @@ namespace UnitTests.Grains
         public Task SetValue(T value)
         {
             State.Value = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<T> GetValue()
@@ -287,12 +288,12 @@ namespace UnitTests.Grains
         public Task SetValue1(TOne value)
         {
             State.Value1 = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
         public Task SetValue2(TTwo value)
         {
             State.Value2 = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<TOne> GetValue1()
@@ -312,17 +313,17 @@ namespace UnitTests.Grains
         public Task SetValue1(TOne value)
         {
             State.Value1 = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
         public Task SetValue2(TTwo value)
         {
             State.Value2 = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
         public Task SetValue3(TThree value)
         {
             State.Value3 = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<TThree> GetValue3()
@@ -366,13 +367,13 @@ namespace UnitTests.Grains
         public Task SetA(T a)
         {
             this._a = a;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task SetB(U b)
         {
             this._b = b;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 
@@ -391,12 +392,12 @@ namespace UnitTests.Grains
         public Task Foo(TKey key, TMessage message, int x)
         {
             _x = x;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public override Task Bar(TKey key, TMessage message1, TMessage message2)
         {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<int> GetX()
@@ -456,7 +457,7 @@ namespace UnitTests.Grains
     {
         public Task Ping()
         {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 
@@ -485,7 +486,7 @@ namespace UnitTests.Grains
 
         public Task Ping()
         {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
     }
 
@@ -504,7 +505,7 @@ namespace UnitTests.Grains
         public Task SetValue(T value)
         {
             _value = value;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<T> GetValue()
@@ -551,7 +552,7 @@ namespace UnitTests.Grains
                 null,
                 delay,
                 TimeSpan.FromMilliseconds(-1));
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
 
@@ -568,19 +569,21 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            GetLogger().Verbose("***Activating*** {0}", this.GetPrimaryKey());
-            return TaskDone.Done;
+            this.GetLogger().Verbose("***Activating*** {0}", this.GetPrimaryKey());
+            return Task.CompletedTask;
         }
 
         public override Task OnDeactivateAsync()
         {
-            GetLogger().Verbose("***Deactivating*** {0}", this.GetPrimaryKey());
-            return TaskDone.Done;
+            this.GetLogger().Verbose("***Deactivating*** {0}", this.GetPrimaryKey());
+            return Task.CompletedTask;
         }
     }
 
     public class LongRunningTaskGrain<T> : Grain, ILongRunningTaskGrain<T>
     {
+        private T lastValue;
+        
         public Task CancellationTokenCallbackThrow(GrainCancellationToken tc)
         {
             tc.CancellationToken.Register(() =>
@@ -588,7 +591,12 @@ namespace UnitTests.Grains
                 throw new InvalidOperationException("From cancellation token callback");
             });
 
-            return TaskDone.Done;
+            return Task.CompletedTask;
+        }
+
+        public Task<T> GetLastValue()
+        {
+            return Task.FromResult(lastValue);
         }
 
         public async Task<bool> CallOtherCancellationTokenCallbackResolve(ILongRunningTaskGrain<T> target)
@@ -624,6 +632,17 @@ namespace UnitTests.Grains
             return await target.LongRunningTask(t, delay);
         }
 
+        public async Task<T> FanOutOtherLongRunningTask(ILongRunningTaskGrain<T> target, T t, TimeSpan delay, int degreeOfParallelism)
+        {
+            var promises = Enumerable
+                .Range(0, degreeOfParallelism)
+                .Select(_ => target.LongRunningTask(t, delay))
+                .ToList();
+
+            await Task.WhenAll(promises);
+            return t;
+        }
+
         public async Task CallOtherLongRunningTask(ILongRunningTaskGrain<T> target, GrainCancellationToken tc, TimeSpan delay)
         {
             await target.LongWait(tc, delay);
@@ -646,6 +665,7 @@ namespace UnitTests.Grains
         public async Task<T> LongRunningTask(T t, TimeSpan delay)
         {
             await Task.Delay(delay);
+            this.lastValue = t;
             return await Task.FromResult(t);
         }
 
@@ -665,7 +685,7 @@ namespace UnitTests.Grains
         public override Task OnActivateAsync()
         {
             collection = new A();
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<int> GetCount() { return Task.FromResult(collection.Count); }
@@ -673,7 +693,7 @@ namespace UnitTests.Grains
         public Task Add(B item)
         {
             collection.Add(item);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<C> RoundTrip(C value)
@@ -686,7 +706,7 @@ namespace UnitTests.Grains
     public class NonGenericCastableGrain : Grain, INonGenericCastableGrain, ISomeGenericGrain<string>, IIndependentlyConcretizedGenericGrain<string>, IIndependentlyConcretizedGrain
     {
         public Task DoSomething() {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<string> Hello() {
@@ -710,8 +730,44 @@ namespace UnitTests.Grains
         }
     }
 
+    public interface IReducer<TState, TAction>
+    {
+        Task<TState> Handle(TState prevState, TAction act);
+    }
 
 
+    [Serializable]
+    public class Reducer1Action { }
+
+    [Serializable]
+    public class Reducer2Action { }
+
+    public class Reducer1 : IReducer<string, Reducer1Action>
+    {
+        public Task<string> Handle(string prevState, Reducer1Action act) => Task.FromResult(prevState + act);
+    }
+
+    public class Reducer2 : IReducer<Int32, Reducer2Action>
+    {
+        public Task<int> Handle(int prevState, Reducer2Action act) => Task.FromResult(prevState + act.ToString().Length);
+    }
+
+    public interface IReducerGameGrain<TState, TAction> : IGrainWithStringKey
+    {
+        Task<TState> Go(TState prevState, TAction act);
+    }
+
+    public class ReducerGameGrain<TState, TAction> : Grain, IReducerGameGrain<TState, TAction>
+    {
+        private readonly IReducer<TState, TAction> reducer;
+
+        public ReducerGameGrain(IReducer<TState, TAction> reducer)
+        {
+            this.reducer = reducer;
+        }
+
+        public Task<TState> Go(TState prevState, TAction act) => this.reducer.Handle(prevState, act);
+    }
 
     namespace Generic.EdgeCases
     {

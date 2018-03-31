@@ -4,23 +4,37 @@ using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.TestingHost;
 using Tester;
-using UnitTests.Tester;
+using TestExtensions;
 using Xunit;
+using Orleans.Logging;
 
+#pragma warning disable CS0618 // Type or member is obsolete
 namespace UnitTests
 {
-    public class ClientInitTests : OrleansTestingBase, IClassFixture<DefaultClusterFixture>
+    public class ClientInitTests : OrleansTestingBase, IClassFixture<ClientInitTests.Fixture>
     {
-        public ClientInitTests(DefaultClusterFixture fixture)
+        private readonly Fixture fixture;
+
+        public class Fixture : BaseTestClusterFixture
         {
-            this.HostedCluster = fixture.HostedCluster;
-            if (!GrainClient.IsInitialized)
+            public ClientConfiguration ClientConfiguration { get; private set; }
+
+            protected override void ConfigureTestCluster(TestClusterBuilder builder)
             {
-                this.HostedCluster.InitializeClient();
+                builder.ConfigureLegacyConfiguration(legacy => this.ClientConfiguration = legacy.ClientConfiguration);
             }
         }
 
-        protected TestCluster HostedCluster { get; set; }
+        public ClientInitTests(Fixture fixture)
+        {
+            this.fixture = fixture;
+            if (!GrainClient.IsInitialized)
+            {
+                GrainClient.Initialize(fixture.ClientConfiguration);
+            }
+        }
+
+        protected TestCluster HostedCluster => this.fixture.HostedCluster;
 
         [Fact, TestCategory("Functional"), TestCategory("Client")]
         public void ClientInit_IsInitialized()
@@ -43,7 +57,7 @@ namespace UnitTests
             GrainClient.Uninitialize();
             Assert.False(GrainClient.IsInitialized);
 
-            GrainClient.Initialize(HostedCluster.ClientConfiguration);
+            GrainClient.Initialize(fixture.ClientConfiguration);
             Assert.True(GrainClient.IsInitialized);
         }
 
@@ -52,23 +66,22 @@ namespace UnitTests
         {
             // First initialize will have been done by orleans unit test base class
 
-            GrainClient.Initialize(HostedCluster.ClientConfiguration);
+            GrainClient.Initialize(this.fixture.ClientConfiguration);
             Assert.True(GrainClient.IsInitialized);
 
-            GrainClient.Initialize(HostedCluster.ClientConfiguration);
+            GrainClient.Initialize(this.fixture.ClientConfiguration);
             Assert.True(GrainClient.IsInitialized);
         }
 
         [Fact, TestCategory("Functional"), TestCategory("Client")]
         public void ClientInit_ErrorDuringInitialize()
         {
-            ClientConfiguration cfg = TestClusterOptions.BuildClientConfiguration(HostedCluster.ClusterConfiguration);
-            cfg.TraceFileName = "TestOnlyThrowExceptionDuringInit.log";
+            ClientConfiguration cfg = this.fixture.ClientConfiguration;
 
             // First initialize will have been done by orleans unit test base class, so uninitialize back to null state
             GrainClient.Uninitialize();
+            GrainClient.ConfigureLoggingDelegate = builder => builder.AddFile("TestOnlyThrowExceptionDuringInit.log");
             Assert.False(GrainClient.IsInitialized, "GrainClient.IsInitialized");
-            Assert.False(LogManager.IsInitialized, "Logger.IsInitialized");
 
             try
             {
@@ -77,13 +90,11 @@ namespace UnitTests
                     GrainClient.Initialize(cfg));
 
                 Assert.False(GrainClient.IsInitialized, "GrainClient.IsInitialized");
-                Assert.False(LogManager.IsInitialized, "Logger.IsInitialized");
 
                 OutsideRuntimeClient.TestOnlyThrowExceptionDuringInit = false;
 
                 GrainClient.Initialize(cfg);
                 Assert.True(GrainClient.IsInitialized, "GrainClient.IsInitialized");
-                Assert.True(LogManager.IsInitialized, "Logger.IsInitialized");
             }
             finally
             {
@@ -94,13 +105,13 @@ namespace UnitTests
         [Fact, TestCategory("Functional"), TestCategory("Client")]
         public void ClientInit_InitializeUnThenReInit()
         {
-            GrainClient.Initialize(HostedCluster.ClientConfiguration);
+            GrainClient.Initialize(this.fixture.ClientConfiguration);
             Assert.True(GrainClient.IsInitialized);
 
             GrainClient.Uninitialize();
             Assert.False(GrainClient.IsInitialized);
 
-            GrainClient.Initialize(HostedCluster.ClientConfiguration);
+            GrainClient.Initialize(this.fixture.ClientConfiguration);
             Assert.True(GrainClient.IsInitialized);
 
             GrainClient.Uninitialize();
@@ -108,3 +119,5 @@ namespace UnitTests
         }
     }
 }
+
+#pragma warning restore CS0618 // Type or member is obsolete

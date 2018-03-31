@@ -17,15 +17,15 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            logger = GetLogger(String.Format("ErrorGrain-{0}-{1}-{2}", RuntimeIdentity, Identity, Data.ActivationId));
+            logger = this.GetLogger(String.Format("ErrorGrain-{0}-{1}-{2}", RuntimeIdentity, Identity, Data.ActivationId));
             logger.Info("Activate.");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task LogMessage(string msg)
         {
            logger.Info(msg);
-           return TaskDone.Done;
+           return Task.CompletedTask;
         }
 
         public Task SetAError(int a)
@@ -53,7 +53,7 @@ namespace UnitTests.Grains
         public Task LongMethod(int waitTime)
         {
             Thread.Sleep(waitTime);
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task LongMethodWithError(int waitTime)
@@ -62,17 +62,17 @@ namespace UnitTests.Grains
             throw new Exception("LongMethodWithError");
         }
 
-        public async Task DelayMethod(int waitTime)
+        public async Task DelayMethod(int milliseconds)
         {
             logger.Info("DelayMethod {0}.", counter);
             counter++;
-            await Task.Delay(TimeSpan.FromMilliseconds(1)).WithTimeout(TimeSpan.FromMilliseconds(50));
+            await Task.Delay(TimeSpan.FromMilliseconds(milliseconds));
         }
 
         public Task Dispose()
         {
             logger.Info("Dispose()");
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<int> UnobservedErrorImmideate()
@@ -177,7 +177,7 @@ namespace UnitTests.Grains
 
         public Task AddChildren(List<IErrorGrain> children)
         {
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public async Task<bool> ExecuteDelayed(TimeSpan delay)

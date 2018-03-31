@@ -15,7 +15,7 @@ namespace UnitTests.Grains
 
         public override Task OnActivateAsync()
         {
-            _logger = GetLogger("ProducerEventCountingGrain " + IdentityString);
+            _logger = this.GetLogger("ProducerEventCountingGrain " + IdentityString);
             _logger.Info("Producer.OnActivateAsync");
             _numProducedItems = 0;
             return base.OnActivateAsync();
@@ -23,7 +23,6 @@ namespace UnitTests.Grains
 
         public override async Task OnDeactivateAsync()
         {
-            _logger = GetLogger("ProducerEventCountingGrain " + IdentityString);
             _logger.Info("Producer.OnDeactivateAsync");
             _numProducedItems = 0;
             await base.OnDeactivateAsync();
@@ -43,7 +42,7 @@ namespace UnitTests.Grains
             IStreamProvider streamProvider = GetStreamProvider(providerToUse);
             IAsyncStream<int> stream = streamProvider.GetStream<int>(streamId, ConsumerEventCountingGrain.StreamNamespace);
             _producer = stream;
-            return TaskDone.Done;
+            return Task.CompletedTask;
         }
 
         public Task<int> GetNumberProduced()

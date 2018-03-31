@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>Microsoft.Orleans.Core.Abstractions</PackageId>
+    <Title>Microsoft Orleans Core Abstractions</Title>
+    <Description>Core abstractions library of Microsoft Orleans</Description>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AssemblyName>Orleans.Core.Abstractions</AssemblyName>
+    <RootNamespace>Orleans</RootNamespace>
+    <TargetFramework>netstandard2.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Runtime.Serialization.Formatters" Version="$(SystemRuntimeVersion)" />
+  </ItemGroup>
+  
+</Project>

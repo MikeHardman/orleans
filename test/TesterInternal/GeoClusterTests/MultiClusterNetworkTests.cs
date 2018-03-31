@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -8,58 +8,54 @@ using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.Runtime.MultiClusterNetwork;
 using Xunit;
+using Xunit.Abstractions;
+using Tester;
 
 namespace Tests.GeoClusterTests
 {
-    public class MultiClusterNetworkTests : TestingClusterHost, IDisposable
+    [TestCategory("GeoCluster")]
+    public class MultiClusterNetworkTests : TestingClusterHost
     {
-
-        // Kill all clients and silos.
-        public void Dispose()
+        public MultiClusterNetworkTests(ITestOutputHelper output) : base(output)
         {
-            try
-            {
-                StopAllClientsAndClusters();
-            }
-            catch (Exception e)
-            {
-                WriteLog("Exception caught in test cleanup function: {0}", e);
-            }
         }
 
         // We need use ClientWrapper to load a client object in a new app domain. 
         // This allows us to create multiple clients that are connected to different silos.
         public class ClientWrapper : ClientWrapperBase
         {
-            public ClientWrapper(string name, int gatewayport) : base(name, gatewayport)
+            public static readonly Func<string, int, string, Action<ClientConfiguration>, Action<IClientBuilder>, ClientWrapper> Factory =
+                (name, gwPort, clusterId, configUpdater, clientConfigurator) => new ClientWrapper(name, gwPort, clusterId, configUpdater, clientConfigurator);
+
+            public ClientWrapper(string name, int gatewayport, string clusterId, Action<ClientConfiguration> customizer, Action<IClientBuilder> clientConfigurator) : base(name, gatewayport, clusterId, customizer, clientConfigurator)
             {
-                systemManagement = GrainClient.GrainFactory.GetGrain<IManagementGrain>(RuntimeInterfaceConstants.SYSTEM_MANAGEMENT_ID);
+                this.systemManagement = this.GrainFactory.GetGrain<IManagementGrain>(0);
             }
             IManagementGrain systemManagement;
 
             public MultiClusterConfiguration InjectMultiClusterConf(params string[] clusters)
             {
-                return systemManagement.InjectMultiClusterConfiguration(clusters).Result;
+                return systemManagement.InjectMultiClusterConfiguration(clusters).GetResult();
             }
 
             public MultiClusterConfiguration GetMultiClusterConfiguration()
             {
-                return systemManagement.GetMultiClusterConfiguration().Result;
+                return systemManagement.GetMultiClusterConfiguration().GetResult();
             }
 
             public List<IMultiClusterGatewayInfo> GetMultiClusterGateways()
             {
-                return systemManagement.GetMultiClusterGateways().Result;
+                return systemManagement.GetMultiClusterGateways().GetResult();
             }
 
             public Dictionary<SiloAddress,SiloStatus> GetHosts()
             {
-                return systemManagement.GetHosts().Result;
+                return systemManagement.GetHosts().GetResult();
             }
         }
 
 
-        [Fact, TestCategory("GeoCluster"), TestCategory("Functional")]
+        [SkippableFact, TestCategory("Functional")]
         public async Task TestMultiClusterConf_1_1()
         {
             // use a random global service id for testing purposes
@@ -68,8 +64,8 @@ namespace Tests.GeoClusterTests
             // create cluster A and clientA
             var clusterA = "A";
             NewGeoCluster(globalserviceid, clusterA, 1);
-            var siloA = Clusters[clusterA].Silos[0].Silo.SiloAddress.Endpoint;
-            var clientA = NewClient<ClientWrapper>(clusterA, 0);
+            var siloA = Clusters[clusterA].Silos.First().SiloAddress.Endpoint;
+            var clientA = this.NewClient<ClientWrapper>(clusterA, 0, ClientWrapper.Factory);
 
             var cur = clientA.GetMultiClusterConfiguration();
             Assert.Null(cur); //no configuration should be there yet
@@ -80,7 +76,7 @@ namespace Tests.GeoClusterTests
             Assert.Null(cur); //no configuration should be there yet
 
             var gateways = clientA.GetMultiClusterGateways();
-            Assert.Equal(1,  gateways.Count);  // "Expect 1 gateway"
+            Assert.Single(gateways);  // "Expect 1 gateway"
             Assert.Equal("A", gateways[0].ClusterId);
             Assert.Equal(siloA, gateways[0].SiloAddress.Endpoint);
             Assert.Equal(GatewayStatus.Active, gateways[0].Status);
@@ -88,8 +84,8 @@ namespace Tests.GeoClusterTests
             // create cluster B and clientB
             var clusterB = "B";
             NewGeoCluster(globalserviceid, clusterB, 1);
-            var siloB = Clusters[clusterB].Silos[0].Silo.SiloAddress.Endpoint;
-            var clientB = NewClient<ClientWrapper>(clusterB, 0);
+            var siloB = Clusters[clusterB].Silos.First().SiloAddress.Endpoint;
+            var clientB = NewClient<ClientWrapper>(clusterB, 0, ClientWrapper.Factory);
 
             cur = clientB.GetMultiClusterConfiguration();
             Assert.Null(cur); //no configuration should be there yet
@@ -125,7 +121,7 @@ namespace Tests.GeoClusterTests
             }
 
             // shut down cluster B
-            StopSilo(Clusters[clusterB].Silos[0]);
+            Clusters[clusterB].Cluster.StopAllSilos();
             await WaitForLivenessToStabilizeAsync();
 
             // expect disappearance of gateway from multicluster network
@@ -133,7 +129,7 @@ namespace Tests.GeoClusterTests
             gateways = clientA.GetMultiClusterGateways();
             Assert.Equal(2,  gateways.Count);  // "Expect 2 gateways"
             var activegateways = gateways.Where(g => g.Status == GatewayStatus.Active).ToList();
-            Assert.Equal(1,  activegateways.Count);  // "Expect 1 active gateway"
+            Assert.Single(activegateways);  // "Expect 1 active gateway"
             Assert.Equal("A", activegateways[0].ClusterId);
         }
 
@@ -150,7 +146,7 @@ namespace Tests.GeoClusterTests
             }
         }
 
-        [Fact, TestCategory("GeoCluster"), TestCategory("Functional")]
+        [SkippableFact(), TestCategory("Functional")]
         public async Task TestMultiClusterConf_3_3()
         {
             // use a random global service id for testing purposes
@@ -163,27 +159,17 @@ namespace Tests.GeoClusterTests
             Action<ClusterConfiguration> configcustomizer = (ClusterConfiguration c) =>
             {
                 c.Globals.DefaultMultiCluster = new List<string>(2) { clusterA, clusterB };
-
-                // logging  
-                foreach (var o in c.Overrides)
-                {
-                   o.Value.TraceLevelOverrides.Add(new Tuple<string, Severity>("Runtime.MultiClusterOracle", Severity.Verbose));
-                }
             };
       
             // create cluster A and clientA
             NewGeoCluster(globalserviceid, clusterA, 3, configcustomizer);
-            var clientA = NewClient<ClientWrapper>(clusterA, 0);
-            var portA0 = Clusters[clusterA].Silos[0].Endpoint.Port;
-            var portA1 = Clusters[clusterA].Silos[1].Endpoint.Port;
-            var portA2 = Clusters[clusterA].Silos[2].Endpoint.Port;
+            var clientA = this.NewClient<ClientWrapper>(clusterA, 0, ClientWrapper.Factory);
+            var portsA = Clusters[clusterA].Cluster.GetActiveSilos().OrderBy(x => x.SiloAddress).Select(x => x.SiloAddress.Endpoint.Port).ToArray();
 
             // create cluster B and clientB
             NewGeoCluster(globalserviceid, clusterB, 3, configcustomizer);
-            var clientB = NewClient<ClientWrapper>(clusterB, 0);
-            var portB0 = Clusters[clusterB].Silos[0].Endpoint.Port;
-            var portB1 = Clusters[clusterB].Silos[1].Endpoint.Port;
-            var portB2 = Clusters[clusterB].Silos[2].Endpoint.Port;
+            var clientB = this.NewClient<ClientWrapper>(clusterB, 0, ClientWrapper.Factory);
+            var portsB = Clusters[clusterB].Cluster.GetActiveSilos().OrderBy(x => x.SiloAddress).Select(x => x.SiloAddress.Endpoint.Port).ToArray();
 
             // wait for membership to stabilize
             await WaitForLivenessToStabilizeAsync();
@@ -197,32 +183,32 @@ namespace Tests.GeoClusterTests
 
             // expect 4 active gateways, two per cluster
             var activegateways = clientA.GetMultiClusterGateways().Where(g => g.Status == GatewayStatus.Active).ToList();
-            Assert.Equal(string.Join(",", portA0, portA1),
+            Assert.Equal(string.Join(",", portsA[0], portsA[1]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterA).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
-            Assert.Equal(string.Join(",", portB0, portB1),
+            Assert.Equal(string.Join(",", portsB[0], portsB[1]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterB).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
             var activegatewaysB = clientB.GetMultiClusterGateways().Where(g => g.Status == GatewayStatus.Active).ToList();
  
             // shut down one of the gateways in cluster B gracefully
-            var target = Clusters[clusterB].Silos.Where(h => h.Endpoint.Port == portB1).FirstOrDefault();
+            var target = Clusters[clusterB].Cluster.GetActiveSilos().Where(h => h.SiloAddress.Endpoint.Port == portsB[1]).FirstOrDefault();
             Assert.NotNull(target);
-            StopSilo(target);
+            Clusters[clusterB].Cluster.StopSilo(target);
             await WaitForLivenessToStabilizeAsync();
 
             // expect disappearance and replacement of gateway from multicluster network
             await WaitForMultiClusterGossipToStabilizeAsync(false);
             AssertSameList(clientA.GetMultiClusterGateways(), clientB.GetMultiClusterGateways());
             activegateways = clientA.GetMultiClusterGateways().Where(g => g.Status == GatewayStatus.Active).ToList();
-            Assert.Equal(string.Join(",", portA0, portA1),
+            Assert.Equal(string.Join(",", portsA[0], portsA[1]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterA).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
-            Assert.Equal(string.Join(",", portB0, portB2),
+            Assert.Equal(string.Join(",", portsB[0], portsB[2]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterB).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
      
 
             // kill one of the gateways in cluster A
-            target = Clusters[clusterA].Silos.Where(h => h.Endpoint.Port == portA1).FirstOrDefault();
+            target = Clusters[clusterA].Cluster.GetActiveSilos().Where(h => h.SiloAddress.Endpoint.Port == portsA[1]).FirstOrDefault();
             Assert.NotNull(target);
-            KillSilo(target);
+            Clusters[clusterA].Cluster.KillSilo(target);
             await WaitForLivenessToStabilizeAsync();
 
             // wait for time necessary before peer removal can kick in
@@ -232,7 +218,7 @@ namespace Tests.GeoClusterTests
             while (true)
             {
                 var hosts = clientA.GetHosts();
-                var killedone = hosts.Where(kvp => kvp.Key.Endpoint.Port == portA1).FirstOrDefault();
+                var killedone = hosts.Where(kvp => kvp.Key.Endpoint.Port == portsA[1]).FirstOrDefault();
                 Assert.True(killedone.Value != SiloStatus.None);
                 if (killedone.Value == SiloStatus.Dead)
                     break;
@@ -244,9 +230,9 @@ namespace Tests.GeoClusterTests
 
             AssertSameList(clientA.GetMultiClusterGateways(), clientB.GetMultiClusterGateways());
             activegateways = clientA.GetMultiClusterGateways().Where(g => g.Status == GatewayStatus.Active).ToList();
-            Assert.Equal(string.Join(",", portA0, portA2),
+            Assert.Equal(string.Join(",", portsA[0], portsA[2]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterA).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
-            Assert.Equal(string.Join(",", portB0, portB2),
+            Assert.Equal(string.Join(",", portsB[0], portsB[2]),
                             string.Join(",", activegateways.Where(g => g.ClusterId == clusterB).Select(g => g.SiloAddress.Endpoint.Port).OrderBy(x => x)));
         }
     }
